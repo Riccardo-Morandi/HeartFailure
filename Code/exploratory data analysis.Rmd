@@ -1,0 +1,298 @@
+---
+title: "Exploratory data analysis"
+output: html_notebook
+---
+
+this is a fisrt exploratory data analysis of the preprocessed data
+
+```{r}
+library(tidyverse)
+library(GGally)
+```
+
+loading the preprocessed dataframes
+```{r }
+load("~/Documents/Applied Statistics/Project/Materiale_appstat/final dataframes/final_comorbidita.RData")
+load("~/Documents/Applied Statistics/Project/Materiale_appstat/final dataframes/final_data.RData")
+load("~/Documents/Applied Statistics/Project/Materiale_appstat/final dataframes/final_hospitalization.RData")
+load("~/Documents/Applied Statistics/Project/Materiale_appstat/final dataframes/final_PDC.RData")
+load("~/Documents/Applied Statistics/Project/Materiale_appstat/final dataframes/final_prescriptions.RData")
+```
+
+```{r }
+glimpse(final_data)
+final_data[,9:28] <- lapply(final_data[,9:28] , factor)
+```
+
+```{r}
+glimpse(final_hospitalization)
+```
+
+```{r}
+glimpse(final_prescriptions)
+```
+
+lets start by potting the distribution of different variables
+
+### labelOUT
+
+```{r}
+ggplot(final_data,aes(labelOUT)) + geom_bar()
+```
+
+```{r}
+final_data$labelOUT <- droplevels(final_data$labelOUT)
+table(final_data$labelOUT)
+```
+
+the datasets is quite unbalanced, we have 5 times more truncated than not deceased people
+we neet to keep this in mind when training models
+
+### data_rif_ev
+
+```{r}
+ ggplot(final_data,aes(data_rif_ev,colour = labelOUT)) + geom_freqpoly(binwidth = 7)
+```
+
+we can see that the patients do not enter the study uniformly
+the number of deaths goes down ad the times goes on as expected since the patients have less time to die
+
+###SESSO
+
+```{r}
+ggplot(final_data, aes(SESSO)) + geom_bar(aes(fill = labelOUT))
+```
+
+the data seems quite balanced in terms of both the genders and the proportion of deaths per gender
+
+```{r}
+table(final_data$SESSO,final_data$labelOUT)
+```
+
+the proportion is very similar
+
+### ASL_RESIDENZA
+
+```{r}
+ggplot(final_data, aes(ASL_RESIDENZA)) + geom_bar(aes(fill = labelOUT))
+```
+
+the patients are not uniformly distributed in the ASL
+
+```{r}
+table(final_data$labelOUT,final_data$ASL_RESIDENZA)
+```
+
+```{r}
+sc = rep(0,30)
+for(i in 1:15){
+  sc[2*i - 1] = sum(table(final_data$labelOUT,final_data$ASL_RESIDENZA)[,i])
+  sc[2*i] = sum(table(final_data$labelOUT,final_data$ASL_RESIDENZA)[,i])
+}
+table(final_data$labelOUT,final_data$ASL_RESIDENZA)/sc
+```
+
+the proportion of deeceeased is very closse for the different ASL
+
+### data_studio_out
+
+```{r}
+final_data %>% filter(labelOUT == "DECEDUTO") %>%  ggplot(aes(data_studio_out)) + geom_freqpoly(binwidth = 7)
+```
+
+we can see that more patients die as the time goes on
+
+### eta_min
+
+```{r}
+ggplot(final_data, aes(eta_Min)) + geom_histogram(aes(fill = labelOUT),binwidth = 1)
+```
+we can clearly see that the older the patients, the hihgher the proportion of deaths, we can also see that for very hold patientss we have a few data points
+
+```{r}
+sc = rep(0,50)
+for(i in 1:50){
+  sc[2*i - 1] = sum(table(final_data$labelOUT,final_data$eta_Min)[,i])
+  sc[2*i] = sum(table(final_data$labelOUT,final_data$eta_Min)[,i])
+}
+age_table <- table(final_data$labelOUT,final_data$eta_Min)/sc
+age_table
+```
+
+```{r}
+y <- age_table[1,]
+x = seq(50,99)
+df = tibble(x,y)
+ggplot(df,aes(x,y)) + geom_line()
+```
+
+### time_in_hosspital
+
+```{r}
+ggplot(final_data, aes(time_in_hospital,fill = labelOUT)) + geom_histogram(,binwidth = 1) + xlim(0,100)
+```
+
+
+```{r}
+n = dim(table(final_data$labelOUT,final_data$time_in_hospital))[2]
+sc = rep(0,n)
+for(i in 1:n){
+  sc[2*i - 1] = sum(table(final_data$labelOUT,final_data$time_in_hospital)[,i])
+  sc[2*i] = sum(table(final_data$labelOUT,final_data$time_in_hospital)[,i])
+}
+h_table <- table(final_data$labelOUT,final_data$time_in_hospital)/sc
+h_table
+```
+
+
+```{r}
+y <- h_table[1,]
+x = sort(unique(final_data$time_in_hospital))
+df = tibble(x,y)
+ggplot(df,aes(x,y)) + geom_line()
+```
+
+we can see that as the number of days in the hospital increases, the likelyhood of death increases
+
+### comorbidità
+
+```{r}
+ggplot(final_data,aes(as.factor(comorbidita))) + geom_bar(aes(fill = labelOUT))
+```
+
+```{r}
+n = dim(table(final_data$labelOUT,final_data$comorbidita))[2]
+sc = rep(0,n)
+for(i in 1:n){
+  sc[2*i - 1] = sum(table(final_data$labelOUT,final_data$comorbidita)[,i])
+  sc[2*i] = sum(table(final_data$labelOUT,final_data$comorbidita)[,i])
+}
+c_table <- table(final_data$labelOUT,final_data$comorbidita)/sc
+c_table
+```
+
+```{r}
+y <- c_table[1,]
+x = sort(unique(final_data$comorbidita))
+df = tibble(x,y)
+ggplot(df,aes(x,y)) + geom_line()
+```
+
+we need to compute the carlston index and not just the number of comorbidities to have a better picture
+
+### ICD
+
+```{r}
+ggplot(final_data,aes(as.factor(ICD))) + geom_bar(aes(fill = labelOUT))
+```
+
+```{r}
+table(final_data$labelOUT,final_data$ICD)
+```
+
+### SHOCK
+
+```{r}
+ggplot(final_data,aes(as.factor(SHOCK))) + geom_bar(aes(fill = labelOUT))
+```
+
+```{r}
+table(final_data$labelOUT,final_data$SHOCK)
+```
+
+### CABG
+
+```{r}
+ggplot(final_data,aes(as.factor(CABG))) + geom_bar(aes(fill = labelOUT))
+```
+
+```{r}
+table(final_data$labelOUT,final_data$CABG)
+```
+
+### CABG
+
+```{r}
+ggplot(final_data,aes(as.factor(CABG))) + geom_bar(aes(fill = labelOUT))
+```
+
+```{r}
+table(final_data$labelOUT,final_data$CABG)
+```
+
+### PTCA
+
+```{r}
+ggplot(final_data,aes(as.factor(PTCA))) + geom_bar(aes(fill = labelOUT))
+```
+
+```{r}
+table(final_data$labelOUT,final_data$PTCA)
+```
+
+## adherence measures
+
+### PDC_AA
+
+```{r}
+ ggplot(final_data,aes(PDC_AA,fill = labelOUT)) + geom_boxplot()
+```
+
+```{r}
+ ggplot(final_data,aes(labelOUT,PDC_AA)) + geom_violin(aes(fill = labelOUT))
+```
+
+```{r}
+ ggplot(final_data,aes(PDC_AA,fill = labelOUT)) + geom_histogram(binwidth = 0.05)
+```
+
+
+this does not look good
+
+### PDC_BB
+
+```{r}
+ ggplot(final_data,aes(PDC_BB,fill = labelOUT)) + geom_boxplot()
+```
+
+```{r}
+ ggplot(final_data,aes(labelOUT,PDC_BB)) + geom_violin(aes(fill = labelOUT))
+```
+
+```{r}
+ggplot(final_data,aes(PDC_BB,fill = labelOUT)) + geom_histogram(binwidth = 0.05)
+```
+
+### PDC_RAS
+
+```{r}
+ ggplot(final_data,aes(PDC_RAS,fill = labelOUT)) + geom_boxplot()
+```
+
+```{r}
+ ggplot(final_data,aes(labelOUT,PDC_RAS)) + geom_violin(aes(fill = labelOUT))
+```
+
+```{r}
+ggplot(final_data,aes(PDC_RAS,fill = labelOUT)) + geom_histogram(binwidth = 0.05)
+```
+
+
+this looks promising
+
+### n_drugs
+
+```{r}
+ggplot(final_data,aes(n_drugs)) + geom_bar(aes(fill= labelOUT))
+```
+
+```{r}
+n = dim(table(final_data$labelOUT,final_data$n_drugs))[2]
+sc = rep(0,n)
+for(i in 1:n){
+  sc[2*i - 1] = sum(table(final_data$labelOUT,final_data$n_drugs)[,i])
+  sc[2*i] = sum(table(final_data$labelOUT,final_data$n_drugs)[,i])
+}
+z_table <- table(final_data$labelOUT,final_data$n_drugs)/sc
+z_table
+```

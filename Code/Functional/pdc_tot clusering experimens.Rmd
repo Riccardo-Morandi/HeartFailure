@@ -1,0 +1,175 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+setwd("/Users/macbookpro/Documents/Applied Statistics/Project/Materiale_appstat/Code/Functional/")
+library(tidyverse)
+library(fda)
+library(fields)
+library(fdakma)
+library(fdacluster)
+```
+
+```{r}
+load("~/Documents/Applied Statistics/Project/Materiale_appstat/Code/Functional/pazienti.RData")
+load("~/Documents/Applied Statistics/Project/Materiale_appstat/Code/Functional/PDC_TOT.RData")
+load("~/Documents/Applied Statistics/Project/Materiale_appstat/final dataframes/data.RData")
+```
+
+```{r}
+days <- 1:365
+basis <- create.bspline.basis(days, norder=4)
+lam <- 1e-8
+functionalPar <- fdPar(fdobj=basis, Lfdobj=2, lambda=lam)  
+data.smooth <- smooth.basis(days, PDC_TOT, functionalPar)
+eval.0 <- eval.fd(days, data.smooth$fd, Lfd=0)
+```
+
+```{r}
+n=dim(PDC_TOT)[2]
+index=sample(n,20)
+plot.fd(data.smooth$fd[index[1:10]],xlab='weeks',ylab='PDC')
+```
+
+```{r}
+id <- sample(n,100)
+plot.fd(data.smooth$fd[id],xlab='weeks',ylab='PDC',col = pazienti$labelOUT[id])
+```
+
+running the alg on a subset
+
+```{r}
+nkmeans <- 300
+x <- t(matrix(rep(days,nkmeans),365,nkmeans))
+y <- t(eval.0[,1:nkmeans])
+
+system.time(fdakma0der <- fdakmeans(x = x,y = y, n_clusters = 3,
+  warping_class = "none",
+  metric = "l2",
+  centroid_type = "medoid",
+  seeds = c(1,9,130),
+  parallel_method = 1L,
+  number_of_threads = 4L,
+)
+)
+
+labels <- fdakma0der$memberships
+```
+
+```{r}
+matplot(t(fdakma0der$aligned_curves[,1,]),type = 'l',
+        main='clustered and alligned curves',xlab='weeks',ylab='PDC', col = labels)
+```
+
+```{r}
+autoplot(fdakma0der,type = "amplitude")
+```
+
+```{r}
+matplot(t(fdakma0der$center_curves[,1,]),type = 'l',
+        main='clustered and alligned curves',xlab='weeks',ylab='PDC', col = 1:4)
+```
+
+
+```{r}
+matplot(t(fdakma0der$aligned_curves[which(labels == 1),1,]),type = 'l',
+        main='clustered and alligned curves',xlab='weeks',ylab='PDC',
+        col = pazienti[which(labels == 1),2])
+```
+
+```{r}
+table(pazienti$labelOUT[which(labels == 1)])
+```
+
+
+```{r}
+matplot(t(fdakma0der$aligned_curves[which(labels == 2)[1:100],1,]),type = 'l',
+        main='clustered and alligned curves',xlab='weeks',ylab='PDC',
+        col = pazienti[which(labels == 2)[1:100],2])
+```
+
+```{r}
+table(pazienti$labelOUT[which(labels == 2)])
+```
+
+
+```{r}
+matplot(t(fdakma0der$aligned_curves[which(labels == 3)[1:50],1,]),type = 'l',
+        main='clustered and alligned curves',xlab='weeks',ylab='PDC',
+        col = pazienti[which(labels == 3)[1:50],2])
+```
+
+```{r}
+table(pazienti$labelOUT[which(labels == 3)])
+```
+
+
+```{r}
+nkmeans <- 1000
+x <- t(matrix(rep(days,nkmeans),365,nkmeans))
+y <- t(eval.0[,1:nkmeans])
+
+system.time(fdakma0der <- fdakmeans(x = x,y = y, n_clusters = 3,
+  warping_class = "none",
+  metric = "l2",
+  centroid_type = "medoid",
+  seeds = c(1,9,130),
+  parallel_method = 1L,
+  number_of_threads = 4L,
+  distance_relative_tolerance = 1e-3,
+  add_silhouettes = FALSE
+  )
+)
+
+labels <- fdakma0der$memberships
+```
+
+```{r}
+matplot(t(fdakma0der$aligned_curves[,1,]),type = 'l',
+        main='clustered and alligned curves',xlab='weeks',ylab='PDC', col = labels)
+```
+
+```{r}
+autoplot(fdakma0der,type = "amplitude")
+```
+
+```{r}
+matplot(t(fdakma0der$center_curves[,1,]),type = 'l',
+        main='clustered and alligned curves',xlab='weeks',ylab='PDC', col = 1:4)
+```
+
+
+```{r}
+matplot(t(fdakma0der$aligned_curves[which(labels == 1),1,]),type = 'l',
+        main='clustered and alligned curves',xlab='weeks',ylab='PDC',
+        col = pazienti[which(labels == 1),2])
+```
+
+```{r}
+table(pazienti$labelOUT[which(labels == 1)])
+```
+
+
+```{r}
+matplot(t(fdakma0der$aligned_curves[which(labels == 2)[1:100],1,]),type = 'l',
+        main='clustered and alligned curves',xlab='weeks',ylab='PDC',
+        col = pazienti[which(labels == 2)[1:100],2])
+```
+
+```{r}
+table(pazienti$labelOUT[which(labels == 2)])
+```
+
+
+```{r}
+matplot(t(fdakma0der$aligned_curves[which(labels == 3)[1:100],1,]),type = 'l',
+        main='clustered and alligned curves',xlab='weeks',ylab='PDC',
+        col = pazienti[which(labels == 3)[1:100],2])
+```
+
+```{r}
+table(pazienti$labelOUT[which(labels == 3)])
+```
+

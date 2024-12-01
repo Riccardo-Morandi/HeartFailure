@@ -1,0 +1,61 @@
+---
+title: "plot grafico survival"
+author: "Riccardo Morandi"
+date: "2023-07-16"
+output: html_document
+---
+
+metti in survplots i dati che avresti usato per i plot normale come nel file survival_applie_PAI_TOT
+
+```{r}
+nplots <- 5
+
+unicurves <- t(survplots$surv[1:730,])
+
+grids <- matrix(rep(1:730,nplots),nrow = nplots, ncol = 730,byrow = TRUE)
+PAI = c("0","0.33","0.5","0.66","1")
+
+wrangled_data <- tibble::tibble(
+      grid = purrr::array_tree(grids, margin = 1),
+      value = purrr::array_tree(unicurves, margin = 1),
+      PAI = PAI,
+      curve_id = 1:nplots,
+    ) |>
+      tidyr::unnest(cols = c(grid, value)) |> 
+  dplyr::bind_rows() |>
+    dplyr::mutate(
+      PAI = as.factor(PAI),
+      curve_id = as.factor(curve_id),
+    )
+
+```
+
+```{r}
+mycolors <- c("#FF0000","#FFA700" ,"#FFF400" ,"#A3FF00" ,"#2CBA00")
+
+P1 <- wrangled_data |>
+      ggplot2::ggplot(ggplot2::aes(
+        x = grid,
+        y = value,
+        group = curve_id,
+        color = PAI
+      )) +
+      ggplot2::geom_line(linewidth = 0.8) +
+      ggplot2::labs(
+        x = "Day",
+        y = "Survival Probability"
+      ) + scale_color_manual(values=mycolors) +
+      ggplot2::theme(legend.position = "right",axis.text = element_text(size = 12),
+                     axis.title = element_text(size = 15)) + ylim(c(0,1)) + xlim(c(0,730)) +
+  scale_x_continuous(breaks = c(0,365,730))
+
+P1
+```
+
+
+questo te lo salva nella current working directory
+
+```{r}
+P1
+ggsave("survival_clusters.png", dpi = 1000, width = 10, height = 5)
+```

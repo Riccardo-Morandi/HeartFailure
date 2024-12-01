@@ -1,0 +1,102 @@
+---
+title: "Survival_applied"
+output: html_document
+date: "2023-05-08"
+---
+
+```{r}
+library(ISLR2)
+load("~/Desktop/PoliMi 2022-2023/Secondo Semestre/Applied Statistics/Project/Survival/data_AA.RData")
+load("~/Desktop/PoliMi 2022-2023/Secondo Semestre/Applied Statistics/Project/Survival/data_BB.RData")
+load("~/Desktop/PoliMi 2022-2023/Secondo Semestre/Applied Statistics/Project/Survival/data_RAS.RData")
+load("~/Desktop/PoliMi 2022-2023/Secondo Semestre/Applied Statistics/Project/Survival/data_AA_BB.RData")
+load("~/Desktop/PoliMi 2022-2023/Secondo Semestre/Applied Statistics/Project/Survival/data_AA_RAS.RData")
+load("~/Desktop/PoliMi 2022-2023/Secondo Semestre/Applied Statistics/Project/Survival/data_RAS_BB.RData")
+
+#attach(data)
+#table(sex)
+#table(diagnosis) --> comorbidity in our case
+#table(status) --> TRONCATO/DECEDUTO in labelOUT
+```
+# Survival data_AA
+```{r}
+#attach(data_AA)
+data = data_AA
+attach(data)
+```
+
+
+The variables status and days_of_followup must be created:
+```{r}
+data$status <- ifelse(data$labelOUT == "TRONCATO",1, 0)
+data$days_of_followup <- as.numeric(data_AA$data_studio_out - data_AA$data_rif_ev)
+data$PAI_RANGE <- cut(
+  data$PAI,
+  breaks = c(0, 0.01, 0.34, 0.51, 0.67, 1.01),
+  labels = c("0", "0.33.", "0.5", "0.67", "1"),
+  right = FALSE
+)
+```
+To begin the analysis, we re-create  the Kaplan-Meier survival curve  shown in  Figure 11.2, using the `survfit()` function within the `R` `survival` library. Here `time` corresponds to $y_i$, the time to the $i$th event (either censoring or death).
+```{r}
+attach(data)
+library(survival)
+fit.surv <- survfit(Surv(days_of_followup, status) ~ 1)
+plot(fit.surv, xlab = "Days",
+    ylab = "Estimated Probability of Survival", xlim = c(365,1095))
+
+```
+
+Next we create Kaplan-Meier survival curves that are stratified by `SESSO`.
+```{r}
+fit.sex <- survfit(Surv(days_of_followup, status) ~ SESSO)
+plot.new()
+plot(fit.sex, xlab = "Days",
+    ylab = "Estimated Probability of Survival", col = c(2,4),xlim = c(365,1095))
+#legend("bottomleft", levels(SESSO), col = c(2,4), lty = 1)
+```
+We can perform a log-rank test to compare the survival of males to females, using the `survdiff()` function.
+```{r}
+logrank.test <- survdiff(Surv(days_of_followup, status) ~ SESSO)
+logrank.test
+```
+The resulting $p$-value is $0.8$, indicating  no evidence of a difference in survival between the two sexes.
+
+Next, we fit  Cox proportional hazards models using the `coxph()`  function.
+To begin, we consider a model that uses `SESSO` as the only predictor.
+```{r}
+fit.cox <- coxph(Surv(days_of_followup, status) ~ SESSO)
+summary(fit.cox)
+```
+Regardless of which test we use, we see that there is no clear evidence for a difference in survival between males and females.
+
+Now we fit a  model that makes use of additional predictors. 
+```{r}
+fit.all <- coxph(
+Surv(days_of_followup, status) ~ SESSO + MCS + eta_Min + time_in_hospital + PAI_RANGE)
+fit.all
+```
+Finally, we plot survival curves for each diagnosis category,  adjusting for the other predictors.
+To make these plots, we set the values of the other predictors equal
+to the mean for quantitative variables, and the modal value for
+factors. We first create a data frame with four rows, one for each
+level of diagnosis. The `survfit()` function will produce a curve for each of the rows in this data frame,
+and one call to `plot()` will display them all in the same plot.
+```{r}
+modaldata <- data.frame(
+     PAI_RANGE = levels(PAI_RANGE),
+     SESSO = rep("F", 5),
+     MCS = levels(MCS),
+     time_in_hospital = rep(mean(time_in_hospital), 5),
+     eta_Min = rep(mean(eta_Min), 5)
+     )
+survplots <- survfit(fit.all, newdata = modaldata)
+{plot(survplots, xlab = "Days",ylab = "Survival Probability", col = 1:5, xlim = c(365,730))
+legend("bottomleft", legend = levels(PAI_RANGE), col = 1:5, lty = 1)}
+
+survplots <- survfit(fit.all, newdata = modaldata)
+{plot(survplots, xlab = "Days",ylab = "Survival Probability", col = 1:5, xlim = c(365,1095))
+legend("bottomleft", legend = levels(PAI_RANGE), col = 1:5, lty = 1)}
+```
+
+

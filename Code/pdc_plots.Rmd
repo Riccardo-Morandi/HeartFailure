@@ -1,0 +1,107 @@
+---
+title: "PDC exploration"
+output: html_notebook
+---
+
+```{r}
+library(tidyverse)
+library(patchwork)
+```
+
+```{r}
+load("~/Documents/Applied Statistics/Project/Materiale_appstat/final dataframes/data.RData")
+```
+
+```{r}
+df <- data %>% select(c(labelOUT,hospitalized,PDC_AA,PDC_BB,PDC_RAS,PDC_TOT)) 
+```
+
+
+### PDC_AA
+
+```{r}
+g1 <- ggplot(df, aes(PDC_AA)) + geom_histogram(aes(fill = labelOUT),binwidth = 0.05) + 
+  theme(legend.position = "bottom")
+
+g2 <- df %>% ggplot(aes(y = PDC_AA, fill = labelOUT)) + geom_histogram(binwidth = 0.01, position = "fill") +
+  theme(legend.position = "none")
+
+g1 + g2
+```
+
+```{r}
+g1 <- ggplot(df, aes(PDC_AA)) + geom_histogram(aes(fill = hospitalized),binwidth = 0.05) + 
+  theme(legend.position = "bottom")
+
+g2 <- df %>% ggplot(aes(y = PDC_AA, fill = hospitalized)) + geom_histogram(binwidth = 0.01, position = "fill") +
+  theme(legend.position = "none")
+
+g1 + g2
+```
+
+### PDC_BB
+
+```{r}
+g1 <- ggplot(df, aes(PDC_BB)) + geom_histogram(aes(fill = labelOUT),binwidth = 0.05) + 
+  theme(legend.position = "bottom")
+
+g2 <- df %>% ggplot(aes(y = PDC_BB, fill = labelOUT)) + geom_histogram(binwidth = 0.01, position = "fill") +
+  theme(legend.position = "none")
+
+g1 + g2
+```
+
+```{r}
+g1 <- ggplot(df, aes(PDC_BB)) + geom_histogram(aes(fill = hospitalized),binwidth = 0.05) + 
+  theme(legend.position = "bottom")
+
+g2 <- df %>% ggplot(aes(y = PDC_BB, fill = hospitalized)) + geom_histogram(binwidth = 0.01, position = "fill") +
+  theme(legend.position = "none")
+
+g1 + g2
+```
+
+### PDC_RAS
+
+```{r}
+g1 <- ggplot(df, aes(PDC_RAS)) + geom_histogram(aes(fill = labelOUT),binwidth = 0.05) + 
+  theme(legend.position = "bottom")
+
+g2 <- df %>% ggplot(aes(y = PDC_RAS, fill = labelOUT)) + geom_histogram(binwidth = 0.01, position = "fill") +
+  theme(legend.position = "none")
+
+g1 + g2
+```
+
+```{r}
+g1 <- ggplot(df, aes(PDC_RAS)) + geom_histogram(aes(fill = hospitalized),binwidth = 0.05) + 
+  theme(legend.position = "bottom")
+
+g2 <- df %>% ggplot(aes(y = PDC_RAS, fill = hospitalized)) + geom_histogram(binwidth = 0.01, position = "fill") +
+  theme(legend.position = "none")
+
+g1 + g2
+```
+
+### PDC_TOT
+
+```{r}
+g1 <- ggplot(df, aes(PDC_TOT)) + geom_histogram(aes(fill = labelOUT),binwidth = 0.05) + 
+  theme(legend.position = "bottom")
+
+g2 <- df %>% ggplot(aes(y = PDC_TOT, fill = labelOUT)) + geom_histogram(binwidth = 0.01, position = "fill") +
+  theme(legend.position = "none")
+
+g1 + g2
+```
+
+```{r}
+g1 <- ggplot(df, aes(PDC_TOT)) + geom_histogram(aes(fill = hospitalized),binwidth = 0.05) + 
+  theme(legend.position = "bottom")
+
+g2 <- df %>% ggplot(aes(y = PDC_TOT, fill = hospitalized)) + geom_histogram(binwidth = 0.01, position = "fill") +
+  theme(legend.position = "none")
+
+g1 + g2
+```
+

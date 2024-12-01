@@ -1,0 +1,382 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+set up:
+
+```{r}
+setwd("/Users/macbookpro/Documents/Applied Statistics/Project/Materiale_appstat/Code/Functional/")
+library(tidyverse)
+library(fda)
+library(fields)
+library(fdacluster)
+```
+
+```{r}
+load("~/Documents/Applied Statistics/Project/Materiale_appstat/Code/Functional/pazienti.RData")
+load("~/Documents/Applied Statistics/Project/Materiale_appstat/Code/Functional/PDC_TOT.RData")
+load("~/Documents/Applied Statistics/Project/Materiale_appstat/final dataframes/data.RData")
+```
+
+```{r}
+weekly_pdc <- PDC_TOT[seq(1,365,7),]
+n=dim(PDC_TOT)[2]
+index=sample(n,20)
+matplot(weekly_pdc[,index],type = 'l',main='weekly PDC',xlab='week',ylab='PDC')
+```
+
+```{r}
+weeks <- 1:53
+lambda <- 10^seq(-12,1,by = 1)
+gcv <- numeric(length(lambda))
+basis <- create.bspline.basis(weeks, norder=4)
+
+for (i in 1:length(lambda)){
+  functionalPar <- fdPar(fdobj=basis, Lfdobj=2, lambda=lambda[i])  
+  data.smooth <- smooth.basis(weeks, weekly_pdc, functionalPar)
+  gcv[i] <- mean(data.smooth$gcv)
+}
+```
+
+```{r}
+plot(log(lambda),gcv,type = "b")
+abline(v = log(lambda[which.min(gcv)]), col = 2)
+```
+
+```{r}
+lambda[which.min(gcv)]
+```
+
+the best lambda is s
+
+```{r}
+basis <- create.bspline.basis(weeks, norder=4)
+lam <- 1e-8
+functionalPar <- fdPar(fdobj=basis, Lfdobj=2, lambda=lam)  
+data.smooth <- smooth.basis(weeks, weekly_pdc, functionalPar)
+eval.0 <- eval.fd(weeks, data.smooth$fd, Lfd=0)
+```
+
+```{r}
+plot.fd(data.smooth$fd[index],xlab='weeks',ylab='PDC')
+```
+
+running the alg on a subset
+
+```{r}
+nkmeans <- n
+x <- t(matrix(rep(weeks,nkmeans),53,nkmeans))
+y <- t(eval.0[,1:nkmeans])
+k <- 3
+
+system.time(fdakma0der <- fdakmeans(x = x,y = y, n_clusters = k,
+  warping_class = "none",
+  metric = "l2",
+  centroid_type = "medoid",
+  seeds = sample(nkmeans,k),
+  parallel_method = 1L,
+  number_of_threads = 4L,
+  distance_relative_tolerance = 1e-3,
+  add_silhouettes = FALSE
+)
+)
+
+labels <- fdakma0der$memberships
+```
+
+```{r}
+indexes <- sample(nkmeans,200)
+matplot(t(fdakma0der$aligned_curves[indexes,1,]),type = 'l',
+        main='clustered and alligned curves',xlab='weeks',ylab='PDC', col = labels[indexes])
+```
+
+```{r}
+autoplot(fdakma0der,type = "amplitude")
+```
+
+```{r}
+matplot(t(fdakma0der$center_curves[,1,]),type = 'l',
+        main='clustered and alligned curves',xlab='weeks',ylab='PDC', col = 1:k)
+```
+
+
+```{r}
+matplot(t(fdakma0der$aligned_curves[which(labels == 1)[1:100],1,]),type = 'l',
+        main='clustered and alligned curves',xlab='weeks',ylab='PDC',
+        col = pazienti[which(labels == 1)[1:100],2])
+```
+
+```{r}
+table(pazienti$labelOUT[which(labels == 1)])
+```
+
+
+```{r}
+matplot(t(fdakma0der$aligned_curves[which(labels == 2)[1:100],1,]),type = 'l',
+        main='clustered and alligned curves',xlab='weeks',ylab='PDC',
+        col = pazienti[which(labels == 2)[1:100],2])
+```
+
+```{r}
+table(pazienti$labelOUT[which(labels == 2)])
+```
+
+
+```{r}
+matplot(t(fdakma0der$aligned_curves[which(labels == 3)[1:100],1,]),type = 'l',
+        main='clustered and alligned curves',xlab='weeks',ylab='PDC',
+        col = pazienti[which(labels == 3)[1:100],2])
+```
+
+```{r}
+table(pazienti$labelOUT[which(labels == 3)])
+```
+
+
+```{r}
+matplot(t(fdakma0der$aligned_curves[which(labels == 4)[1:100],1,]),type = 'l',
+        main='clustered and alligned curves',xlab='weeks',ylab='PDC',
+        col = pazienti[which(labels == 4)[1:100],2])
+```
+
+```{r}
+table(pazienti$labelOUT[which(labels == 4)])
+```
+
+saving the labels
+
+```{r}
+setwd("/Users/macbookpro/Documents/Applied Statistics/Project/Materiale_appstat/Code/Functional/")
+save(labels,file = "labels.RData")
+```
+
+
+now I want to ddo he same but on the first and second derivatives to see if we get a differen clustering
+
+for the first derivative we smooth the thirs derivaive of the data
+
+```{r}
+days <- 1:365
+lambda <- 10^seq(-5,3,by = 0.5)
+gcv <- numeric(length(lambda))
+basis <- create.bspline.basis(days, norder=5)
+
+for (i in 1:length(lambda)){
+  functionalPar <- fdPar(fdobj=basis, Lfdobj=3, lambda=lambda[i])  
+  data.smooth <- smooth.basis(days, PDC_TOT, functionalPar)
+  gcv[i] <- mean(data.smooth$gcv)
+}
+```
+
+```{r}
+plot(log(lambda),gcv,type = "b")
+abline(v = log(lambda[which.min(gcv)]), col = 2)
+```
+
+```{r}
+lambda[which.min(gcv)]
+```
+
+
+
+```{r}
+basis <- create.bspline.basis(days, norder=5)
+lam <- 1e2
+functionalPar <- fdPar(fdobj=basis, Lfdobj=3, lambda=lam)  
+data.smooth <- smooth.basis(days, PDC_TOT, functionalPar)
+eval.0 <- eval.fd(days, data.smooth$fd, Lfd=0)
+eval.1 <- eval.fd(days, data.smooth$fd, Lfd=1)
+```
+
+```{r}
+matplot(eval.0[,index],type = 'l')
+```
+
+```{r}
+matplot(eval.1[,index],type = 'l')
+```
+
+```{r}
+weeklyfirstder <- eval.1[seq(1,365,7),]
+```
+
+```{r}
+nkmeans <- 3000
+x <- t(matrix(rep(weeks,nkmeans),53,nkmeans))
+y <- t(weeklyfirstder[,1:nkmeans])
+k <- 4
+
+system.time(fdakma1der <- fdakmeans(x = x,y = y, n_clusters = k,
+  warping_class = "none",
+  metric = "l2",
+  centroid_type = "medoid",
+  seeds = sample(nkmeans,k),
+  parallel_method = 1L,
+  number_of_threads = 4L,
+  distance_relative_tolerance = 1e-3,
+  add_silhouettes = FALSE
+)
+)
+
+labels <- fdakma1der$memberships
+```
+
+```{r}
+indexes <- sample(nkmeans,200)
+matplot(t(fdakma1der$aligned_curves[indexes,1,]),type = 'l',
+        main='clustered and alligned curves',xlab='weeks',ylab='PDC', col = labels[indexes])
+```
+
+```{r}
+autoplot(fdakma1der,type = "amplitude")
+```
+
+```{r}
+matplot(t(fdakma1der$center_curves[,1,]),type = 'l',
+        main='clustered and alligned curves',xlab='weeks',ylab='PDC', col = 1:k)
+```
+
+
+```{r}
+matplot(eval.0[,which(labels == 1)[1:100]],type = 'l',
+        main='clustered and alligned curves',xlab='weeks',ylab='PDC',
+        col = pazienti[which(labels == 1)[1:100],2])
+```
+
+```{r}
+table(pazienti$labelOUT[which(labels == 1)])
+```
+
+
+```{r}
+matplot(eval.0[,which(labels == 2)[1:100]],type = 'l',
+        main='clustered and alligned curves',xlab='weeks',ylab='PDC',
+        col = pazienti[which(labels == 2)[1:100],2])
+```
+
+```{r}
+table(pazienti$labelOUT[which(labels == 2)])
+```
+
+
+```{r}
+matplot(eval.0[,which(labels == 3)[1:100]],type = 'l',
+        main='clustered and alligned curves',xlab='weeks',ylab='PDC',
+        col = pazienti[which(labels == 3)[1:100],2])
+```
+
+```{r}
+table(pazienti$labelOUT[which(labels == 3)])
+```
+
+
+```{r}
+matplot(eval.0[,which(labels == 4)[1:100]],type = 'l',
+        main='clustered and alligned curves',xlab='weeks',ylab='PDC',
+        col = pazienti[which(labels == 4)[1:100],2])
+```
+
+```{r}
+table(pazienti$labelOUT[which(labels == 4)])
+```
+
+
+this is not meaningful
+
+trying on the second derivative
+```{r}
+basis <- create.bspline.basis(weeks, norder=4)
+lam <- 1e-2
+functionalPar <- fdPar(fdobj=basis, Lfdobj=2, lambda=lam)  
+data.smooth <- smooth.basis(weeks, weekly_pdc, functionalPar)
+eval.2 <- eval.fd(weeks, data.smooth$fd, Lfd=2)
+```
+
+```{r}
+matplot(eval.2[,index],type = 'l')
+```
+
+```{r}
+nkmeans <- 3000
+x <- t(matrix(rep(weeks,nkmeans),53,nkmeans))
+y <- t(eval.2[,1:nkmeans])
+k <- 4
+
+system.time(fdakma2der <- fdakmeans(x = x,y = y, n_clusters = k,
+  warping_class = "none",
+  metric = "l2",
+  centroid_type = "medoid",
+  seeds = sample(nkmeans,k),
+  parallel_method = 1L,
+  number_of_threads = 4L,
+  distance_relative_tolerance = 1e-3,
+  add_silhouettes = FALSE
+)
+)
+
+labels <- fdakma2der$memberships
+```
+
+```{r}
+indexes <- sample(nkmeans,200)
+matplot(t(fdakma2der$aligned_curves[indexes,1,]),type = 'l',
+        main='clustered and alligned curves',xlab='weeks',ylab='PDC', col = labels[indexes])
+```
+
+```{r}
+autoplot(fdakma2der,type = "amplitude")
+```
+
+```{r}
+matplot(t(fdakma2der$center_curves[,1,]),type = 'l',
+        main='clustered and alligned curves',xlab='weeks',ylab='PDC', col = 1:k)
+```
+
+
+```{r}
+matplot(eval.0[,which(labels == 1)[1:100]],type = 'l',
+        main='clustered and alligned curves',xlab='weeks',ylab='PDC',
+        col = pazienti[which(labels == 1)[1:100],2])
+```
+
+```{r}
+table(pazienti$labelOUT[which(labels == 1)])
+```
+
+
+```{r}
+matplot(eval.0[,which(labels == 2)[1:100]],type = 'l',
+        main='clustered and alligned curves',xlab='weeks',ylab='PDC',
+        col = pazienti[which(labels == 2)[1:100],2])
+```
+
+```{r}
+table(pazienti$labelOUT[which(labels == 2)])
+```
+
+
+```{r}
+matplot(eval.0[,which(labels == 3)[1:100]],type = 'l',
+        main='clustered and alligned curves',xlab='weeks',ylab='PDC',
+        col = pazienti[which(labels == 3)[1:100],2])
+```
+
+```{r}
+table(pazienti$labelOUT[which(labels == 3)])
+```
+
+
+```{r}
+matplot(eval.0[,which(labels == 4)[1:100]],type = 'l',
+        main='clustered and alligned curves',xlab='weeks',ylab='PDC',
+        col = pazienti[which(labels == 4)[1:100],2])
+```
+
+```{r}
+table(pazienti$labelOUT[which(labels == 4)])
+```
+
+this in sot useful, since it relies too much on the inital behaviour
+
+

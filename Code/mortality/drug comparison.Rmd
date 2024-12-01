@@ -1,0 +1,457 @@
+---
+title: "drug comparison"
+output: html_notebook
+---
+
+```{r}
+library(tidyverse)
+library(tidymodels)
+library(themis)
+library(patchwork)
+```
+
+## Explore the data
+
+loading the data
+
+```{r}
+load("~/Documents/Applied Statistics/Project/Materiale_appstat/final dataframes/data.RData")
+```
+
+we want to build a logistic regression model using sesso, età, MCS, PDC, n_drugs
+
+we need some preprocesing on this covariates
+
+we filter the observation with only one drug to see the difference between the single drugs
+
+```{r}
+df <- data %>% filter(n_drugs == 1) %>%  select(c(SESSO,labelOUT,eta_Min,MCS,PDC_AA,PDC_BB,PDC_RAS))
+df$labelOUT <- relevel(df$labelOUT,"TRONCATO")
+```
+
+we can now see the ifference between drugs
+
+```{r}
+set.seed(123)
+df_split <- initial_split(df, strata = labelOUT)
+df_train <- training(df_split)
+df_test <- testing(df_split)
+
+set.seed(234)
+df_folds <- vfold_cv(df_train, strata = labelOUT)
+```
+
+lets start by leaving the coefficients as numeric
+
+```{r}
+glm_spec <- logistic_reg(engine = "glm")
+
+rec_paper <- recipe(labelOUT ~ ., data = df_train) %>% 
+  step_normalize(eta_Min)
+
+wf_paper <- workflow(rec_paper %>% step_downsample(labelOUT),glm_spec)
+```
+
+```{r}
+perf <- metric_set(accuracy,
+                   sensitivity,
+                   specificity,
+                   precision,
+                   recall,
+                   roc_auc)
+
+doParallel::registerDoParallel()
+ctrl_preds <- control_resamples(save_pred = TRUE)
+rs_paper <- fit_resamples(wf_paper, df_folds, control = ctrl_preds, metrics = perf)
+```
+
+```{r}
+collect_metrics(rs_paper)
+```
+
+```{r}
+collect_predictions(rs_paper) %>% group_by(id) %>% roc_curve(labelOUT,.pred_DECEDUTO) %>% autoplot()
+```
+
+on the test data
+
+```{r}
+test_fit <- wf_paper %>% last_fit(df_split,metrics = perf) 
+```
+
+```{r}
+collect_metrics(test_fit)
+```
+
+```{r}
+test_pred <- collect_predictions(test_fit)
+```
+
+```{r}
+test_pred %>% conf_mat(labelOUT,.pred_class)
+```
+
+looking at the summary of the model
+
+```{r}
+summary(extract_fit_engine(test_fit))
+```
+
+all of the predictors seem to be influential here
+
+looking at the odds ratios:
+
+```{r}
+test_fit %>% pull(.workflow) %>% pluck(1) %>% tidy(exponentiate = TRUE) %>% arrange(estimate) 
+```
+
+let's plot the coefficients
+
+```{r}
+test_fit %>% pull(.workflow) %>% pluck(1) %>% tidy() %>% 
+  filter(term != "(Intercept)") %>%
+  ggplot(aes(estimate, fct_reorder(term, estimate))) +
+  geom_vline(xintercept = 0, color = "gray50", lty = 2, linewidth = 1.2) +
+  geom_errorbar(aes(
+    xmin = estimate - 1.96*std.error,
+    xmax = estimate + 1.96*std.error),width = .7, alpha = 0.7) +
+  geom_point(size = 2) +
+  labs(y = NULL, x = "Coefficent from logistic regression")
+```
+
+```{r}
+odds_ratios <- test_fit %>% pull(.workflow) %>% pluck(1) %>% tidy(exponentiate = TRUE) %>% 
+  filter(term != "(Intercept)")
+
+odds_ratios$term <- c("Sex M","Age","MCS 1", "MCS 2","MCS 3","MCS 4",
+                      "BB","RAS","AA")
+```
+
+
+better plot:
+```{r}
+P1 <- odds_ratios %>% filter(term!= "Sesso M") %>% 
+ggplot(aes(estimate, fct_reorder(term, estimate))) +
+  geom_vline(xintercept = 1, color = "gray50", lty = 2, linewidth = 1.2) +
+  geom_errorbar(aes(
+    xmin = estimate - 1.96*std.error,
+    xmax = estimate + 1.96*std.error),width = 0.7, alpha = 0.8) +
+  geom_point(size = 2.5) +
+  labs(y = NULL, x = NULL) + ggtitle("Odds ratios from logistic regression") + 
+  theme(legend.position = "none",axis.text = element_text(size = 12),
+        plot.title = element_text(size = 16,hjust = 0.5)) 
+P1
+```
+
+```{r}
+P1
+ggsave("odds_ratios_pdc_single_numeric.png", dpi = 1000)
+```
+
+```{r}
+odds_ratios$color <- as.factor(c(1,1,1,1,1,1,2,3,4))
+
+mycolors <- c("gray0","#F8766D", "#00BA38" ,"#619CFF")
+
+P1 <- odds_ratios %>% 
+ggplot(aes(estimate, fct_reorder(term, estimate),color = color)) +
+  geom_vline(xintercept = 1, color = "gray50", lty = 2, linewidth = 1.2) +
+  geom_errorbar(aes(
+    xmin = estimate - 1.96*std.error,
+    xmax = estimate + 1.96*std.error),width = 0.7, alpha = 0.8) +
+  geom_point(size = 2.5) +
+  scale_color_manual(values=mycolors) +
+  labs(y = NULL, x = NULL) + ggtitle("Odds ratios from logistic regression") + 
+  theme(legend.position = "none",axis.text = element_text(size = 12),
+        plot.title = element_text(size = 16,hjust = 0.5))  
+
+P1
+```
+
+```{r}
+P1
+ggsave("odds_ratios_pdc_single_numeric_color.png", dpi = 1000)
+```
+
+let's try to pull out the gender and see if something happens
+
+```{r}
+rec_nogender <- recipe(labelOUT ~ ., data = df_train) %>% 
+  step_normalize(eta_Min) %>% step_rm(SESSO)
+
+wf_nogender<- workflow(rec_nogender %>% step_downsample(labelOUT),glm_spec)
+```
+
+```{r}
+doParallel::registerDoParallel()
+ctrl_preds <- control_resamples(save_pred = TRUE)
+rs_no_gendder <- fit_resamples(wf_nogender, df_folds, control = ctrl_preds, metrics = perf)
+```
+
+```{r}
+collect_metrics(rs_no_gendder)
+```
+
+```{r}
+collect_predictions(rs_no_gendder) %>% group_by(id) %>% roc_curve(labelOUT,.pred_DECEDUTO) %>% autoplot()
+```
+
+on the test data
+
+```{r}
+test_fit <- wf_nogender %>% last_fit(df_split,metrics = perf) 
+```
+
+```{r}
+collect_metrics(test_fit)
+```
+
+```{r}
+test_pred <- collect_predictions(test_fit)
+```
+
+```{r}
+test_pred %>% conf_mat(labelOUT,.pred_class)
+```
+
+looking at the summary of the model
+
+```{r}
+summary(extract_fit_engine(test_fit))
+```
+
+all of the predictors seem to be influential here
+
+looking at the odds ratios:
+
+```{r}
+test_fit %>% pull(.workflow) %>% pluck(1) %>% tidy(exponentiate = TRUE) %>% arrange(estimate) 
+```
+
+let's plot the coefficients
+
+```{r}
+test_fit %>% pull(.workflow) %>% pluck(1) %>% tidy() %>% 
+  filter(term != "(Intercept)") %>%
+  ggplot(aes(estimate, fct_reorder(term, estimate))) +
+  geom_vline(xintercept = 0, color = "gray50", lty = 2, linewidth = 1.2) +
+  geom_errorbar(aes(
+    xmin = estimate - 1.96*std.error,
+    xmax = estimate + 1.96*std.error),width = .7, alpha = 0.7) +
+  geom_point(size = 2) +
+  labs(y = NULL, x = "Coefficent from logistic regression")
+```
+
+we can see that PDC_AA is not statisticly significant, in the case that we are taking only AA
+
+let's try to reduce the mcs indexes to see it we get more accurate estimates of the coefficients
+
+```{r}
+df2 <- df
+df2$MCS <- as.numeric(df2$MCS)
+```
+
+```{r}
+set.seed(123)
+df2_split <- initial_split(df2, strata = labelOUT)
+df2_train <- training(df2_split)
+df2_test <- testing(df2_split)
+
+set.seed(234)
+df2_folds <- vfold_cv(df2_train, strata = labelOUT)
+```
+
+```{r}
+rec_nogender <- recipe(labelOUT ~ ., data = df2_train) %>% 
+  step_normalize(eta_Min) %>% step_rm(SESSO) %>% step_cut(MCS,breaks = c(1.5),include_outside_range = TRUE) 
+
+wf_nogender<- workflow(rec_nogender %>% step_downsample(labelOUT),glm_spec)
+```
+
+```{r}
+doParallel::registerDoParallel()
+ctrl_preds <- control_resamples(save_pred = TRUE)
+rs_no_gendder <- fit_resamples(wf_nogender, df2_folds, control = ctrl_preds, metrics = perf)
+```
+
+```{r}
+collect_metrics(rs_no_gendder)
+```
+
+```{r}
+collect_predictions(rs_no_gendder) %>% group_by(id) %>% roc_curve(labelOUT,.pred_TRONCATO) %>% autoplot()
+```
+
+on the test data
+
+```{r}
+test_fit <- wf_nogender %>% last_fit(df2_split,metrics = perf) 
+```
+
+```{r}
+collect_metrics(test_fit)
+```
+
+```{r}
+test_pred <- collect_predictions(test_fit)
+```
+
+```{r}
+test_pred %>% conf_mat(labelOUT,.pred_class)
+```
+
+looking at the summary of the model
+
+```{r}
+summary(extract_fit_engine(test_fit))
+```
+
+all of the predictors seem to be influential here
+
+looking at the odds ratios:
+
+```{r}
+test_fit %>% pull(.workflow) %>% pluck(1) %>% tidy(exponentiate = TRUE) %>% arrange(estimate) 
+```
+
+let's plot the coefficients
+
+```{r}
+test_fit %>% pull(.workflow) %>% pluck(1) %>% tidy() %>% 
+  filter(term != "(Intercept)") %>%
+  ggplot(aes(estimate, fct_reorder(term, estimate))) +
+  geom_vline(xintercept = 0, color = "gray50", lty = 2, linewidth = 1.2) +
+  geom_errorbar(aes(
+    xmin = estimate - 1.96*std.error,
+    xmax = estimate + 1.96*std.error),width = .7, alpha = 0.7) +
+  geom_point(size = 2) +
+  labs(y = NULL, x = "Coefficent from logistic regression")
+```
+
+this is confirmed, PDC_AA is not statistically significant
+
+let's see if we consider the cat variables
+
+```{r}
+rec_cat <- recipe(labelOUT ~ ., data = df_train) %>% 
+  step_normalize(eta_Min) %>% step_cut(starts_with("PDC"),breaks = c(0.8),include_outside_range = FALSE)
+
+wf_cat <- workflow(rec_paper %>% step_downsample(labelOUT),glm_spec)
+```
+
+```{r}
+doParallel::registerDoParallel()
+ctrl_preds <- control_resamples(save_pred = TRUE)
+rs_cat <- fit_resamples(wf_cat, df_folds, control = ctrl_preds, metrics = perf)
+```
+
+```{r}
+collect_metrics(rs_cat)
+```
+
+```{r}
+collect_predictions(rs_cat) %>% group_by(id) %>% roc_curve(labelOUT,.pred_DECEDUTO) %>% autoplot()
+```
+
+on the test data
+
+```{r}
+test_fit <- wf_cat %>% last_fit(df_split,metrics = perf) 
+```
+
+```{r}
+collect_metrics(test_fit)
+```
+
+```{r}
+test_pred <- collect_predictions(test_fit)
+```
+
+```{r}
+test_pred %>% conf_mat(labelOUT,.pred_class)
+```
+
+looking at the summary of the model
+
+```{r}
+summary(extract_fit_engine(test_fit))
+```
+
+all of the predictors seem to be influential here
+
+looking at the odds ratios:
+
+```{r}
+test_fit %>% pull(.workflow) %>% pluck(1) %>% tidy(exponentiate = TRUE) %>% arrange(estimate) 
+```
+
+let's plot the coefficients
+
+```{r}
+test_fit %>% pull(.workflow) %>% pluck(1) %>% tidy() %>% 
+  filter(term != "(Intercept)") %>%
+  ggplot(aes(estimate, fct_reorder(term, estimate))) +
+  geom_vline(xintercept = 0, color = "gray50", lty = 2, linewidth = 1.2) +
+  geom_errorbar(aes(
+    xmin = estimate - 1.96*std.error,
+    xmax = estimate + 1.96*std.error),width = .7, alpha = 0.7) +
+  geom_point(size = 2) +
+  labs(y = NULL, x = "Coefficent from logistic regression")
+```
+
+the results do not change, AA does not seem statistically significant
+
+```{r}
+odds_ratios <- test_fit %>% pull(.workflow) %>% pluck(1) %>% tidy(exponentiate = TRUE) %>% 
+  filter(term != "(Intercept)")
+
+odds_ratios$term <- c("Sex Male","Age","MCS 1", "MCS 2","MCS 3","MCS 4",
+                      "AA Adherence ","RAS Adherence","BB Adherence")
+```
+
+
+better plot:
+```{r}
+P1 <- odds_ratios %>% 
+ggplot(aes(estimate, fct_reorder(term, estimate))) +
+  geom_vline(xintercept = 1, color = "gray50", lty = 2, linewidth = 1.2) +
+  geom_errorbar(aes(
+    xmin = estimate - 1.96*std.error,
+    xmax = estimate + 1.96*std.error),width = 0.7, alpha = 0.8) +
+  geom_point(size = 2.5) +
+  labs(y = NULL, x = NULL) + ggtitle("Odds ratios from logistic regression") + 
+  theme(legend.position = "none",axis.text = element_text(size = 12),
+        plot.title = element_text(size = 16,hjust = 0.5)) 
+P1
+```
+
+```{r}
+P1
+ggsave("odds_ratios_pdc_single.png", dpi = 1000)
+```
+
+```{r}
+odds_ratios$color <- as.factor(c(1,1,1,1,1,1,2,3,4))
+
+mycolors <- c("gray0","#F8766D", "#00BA38" ,"#619CFF")
+
+P1 <- odds_ratios %>% 
+ggplot(aes(estimate, fct_reorder(term, estimate),color = color)) +
+  geom_vline(xintercept = 1, color = "gray50", lty = 2, linewidth = 1.2) +
+  geom_errorbar(aes(
+    xmin = estimate - 1.96*std.error,
+    xmax = estimate + 1.96*std.error),width = 0.7, alpha = 0.8) +
+  geom_point(size = 2.5) +
+  scale_color_manual(values=mycolors) +
+  labs(y = NULL, x = NULL) + ggtitle("Odds ratios from logistic regression") + 
+  theme(legend.position = "none",axis.text = element_text(size = 12),
+        plot.title = element_text(size = 16,hjust = 0.5)) 
+
+P1
+```
+
+```{r}
+P1
+ggsave("odds_ratios_pdc_single_color.png", dpi = 1000,height = 4,width = 10)
+```
+

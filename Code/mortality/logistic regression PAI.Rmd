@@ -1,0 +1,544 @@
+---
+title: "logistic regression PAI"
+output: html_notebook
+---
+
+let's start by fitting a logistic regression on our data
+starting from the total adherence measured via PAI
+
+```{r}
+library(tidyverse)
+library(tidymodels)
+library(themis)
+library(patchwork)
+```
+
+loading the data
+
+```{r}
+load("~/Documents/Applied Statistics/Project/Materiale_appstat/final dataframes/data.RData")
+```
+
+```{r}
+glimpse(data)
+```
+
+we want to build a logistic regression model using sesso, età, MCS, PAI
+
+we need some preprocesing on this covariates
+
+```{r}
+df <- data %>% select(c(SESSO,labelOUT,eta_Min,MCS,PAI,n_drugs))
+df$labelOUT <- relevel(df$labelOUT,"TRONCATO")
+```
+
+let's look at the PAI 
+
+```{r}
+ggplot(df,aes(as.factor(PAI))) + geom_bar(aes(fill = labelOUT))
+```
+I will keep it as a number, but possibly group it and use the groupped variable
+
+first we keep this as a double, then we will group it
+
+# logisic regression 
+
+## the basic model
+
+stratified k_fold cross-validation on labelout
+
+```{r}
+set.seed(123)
+df_split <- initial_split(df, strata = labelOUT)
+df_train <- training(df_split)
+df_test <- testing(df_split)
+
+set.seed(234)
+df_folds <- vfold_cv(df_train, strata = labelOUT)
+
+```
+
+```{r}
+glm_spec <- logistic_reg(engine = "glm")
+
+rec_paper <- recipe(labelOUT ~ ., data = df_train) %>% 
+  step_normalize(eta_Min) %>% 
+  step_dummy(all_nominal_predictors())
+
+wf_paper <- workflow(rec_paper %>% step_upsample(labelOUT),glm_spec)
+```
+
+```{r}
+perf <- metric_set(accuracy,
+                   sensitivity,
+                   specificity,
+                   precision,
+                   recall,
+                   roc_auc)
+
+doParallel::registerDoParallel()
+ctrl_preds <- control_resamples(save_pred = TRUE)
+rs_basic <- fit_resamples(wf_paper, df_folds, control = ctrl_preds, metrics = perf)
+```
+
+```{r}
+collect_metrics(rs_basic)
+```
+this is quite good: accucracy of 84% and ROC .77
+
+```{r}
+collect_predictions(rs_basic) %>% group_by(id) %>% roc_curve(labelOUT,.pred_DECEDUTO) %>% autoplot()
+```
+
+fitting the model to the train data data
+
+```{r}
+fit_train <- fit(wf_paper,df_train)
+```
+
+looking at the coefficients:
+
+```{r}
+tidy(fit_train)
+```
+
+all of the coefficients are significant
+
+looking at the odds ratios:
+
+```{r}
+tidy(fit_train,exponentiate=TRUE)
+```
+
+we can see that the ODDS ratio relative to the PAI is 1.55
+
+
+```{r}
+test_fit <- last_fit(wf_paper,df_split,metrics = perf)
+test_fit %>% collect_metrics()
+```
+the performance does not change o the test data, no overfitting.
+
+let's investigate more:
+
+```{r}
+df_preds <- fit_train %>% augment(new_data = df_test)
+```
+
+```{r}
+df_preds %>% roc_curve(labelOUT,.pred_DECEDUTO) %>% autoplot()
+```
+
+looking at the odds ratios:
+
+```{r}
+test_fit %>% pull(.workflow) %>% pluck(1) %>% tidy(exponentiate = TRUE) %>% arrange(estimate) 
+```
+
+let's plot the coefficients
+
+```{r}
+test_fit %>% pull(.workflow) %>% pluck(1) %>% tidy() %>% 
+  filter(term != "(Intercept)") %>%
+  ggplot(aes(estimate, fct_reorder(term, estimate))) +
+  geom_vline(xintercept = 0, color = "gray50", lty = 2, linewidth = 1.2) +
+  geom_errorbar(aes(
+    xmin = estimate - 1.96*std.error,
+    xmax = estimate + 1.96*std.error),width = .7, alpha = 0.7) +
+  geom_point(size = 2) +
+  labs(y = NULL, x = "Coefficent from logistic regression")
+```
+ 
+PAI is clearly significant
+let's treat it as a factor and see if we can find differences
+
+```{r}
+df2 <- data %>% select(c(SESSO,labelOUT,eta_Min,MCS,PAI))
+df2$PAI <- as.factor(df2$PAI)
+df2$labelOUT <- relevel(df2$labelOUT,"TRONCATO")
+```
+ 
+```{r}
+set.seed(123)
+df2_split <- initial_split(df2, strata = labelOUT)
+df2_train <- training(df2_split)
+df2_test <- testing(df2_split)
+
+set.seed(234)
+df2_folds <- vfold_cv(df2_train, strata = labelOUT)
+```
+ 
+```{r}
+rec2 <- recipe(labelOUT ~ ., data = df2_train) %>% 
+  step_normalize(eta_Min) %>%
+  step_dummy(all_nominal_predictors())
+
+wf2 <- workflow(rec2 %>% step_upsample(labelOUT),glm_spec)
+```
+
+```{r}
+doParallel::registerDoParallel()
+ctrl_preds <- control_resamples(save_pred = TRUE)
+rs2 <- fit_resamples(wf2, df2_folds, control = ctrl_preds, metrics = perf)
+```
+
+```{r}
+collect_metrics(rs2)
+```
+this is quite good: accucracy of 70% and ROC .77
+
+```{r}
+collect_predictions(rs2) %>% group_by(id) %>% roc_curve(labelOUT,.pred_TRONCATO) %>% autoplot()
+```
+
+fitting the model to the train data data
+
+```{r}
+fit_train <- fit(wf2,df2_train)
+```
+
+looking at the coefficients:
+
+```{r}
+tidy(fit_train)
+```
+
+all of the coefficients are significant
+
+looking at the odds ratios:
+
+```{r}
+tidy(fit_train,exponentiate=TRUE)
+```
+
+we can see that the ODDS ratio relative to the PAI are high
+
+### evaluation on test data
+
+```{r}
+test_fit <- last_fit(wf2,df2_split,metrics = perf)
+test_fit %>% collect_metrics()
+```
+the performance does not change o the test data, no overfitting.
+
+let's investigate more:
+
+```{r}
+df_preds <- fit_train %>% augment(new_data = df2_test)
+```
+
+```{r}
+df_preds %>% roc_curve(labelOUT,.pred_DECEDUTO) %>% autoplot()
+```
+
+looking at the odds ratios:
+
+```{r}
+test_fit %>% pull(.workflow) %>% pluck(1) %>% tidy(exponentiate = TRUE) %>% arrange(estimate) 
+```
+
+let's plot the coefficients
+
+```{r}
+test_fit %>% pull(.workflow) %>% pluck(1) %>% tidy() %>% 
+  filter(term != "(Intercept)") %>%
+  ggplot(aes(estimate, fct_reorder(term, estimate))) +
+  geom_vline(xintercept = 0, color = "gray50", lty = 2, linewidth = 1.2) +
+  geom_errorbar(aes(
+    xmin = estimate - 1.96*std.error,
+    xmax = estimate + 1.96*std.error),width = .7, alpha = 0.7) +
+  geom_point(size = 2) +
+  labs(y = NULL, x = "Coefficent from logistic regression")
+```
+
+```{r}
+odds_ratios <- test_fit %>% pull(.workflow) %>% pluck(1) %>% tidy(exponentiate = TRUE) %>% 
+  filter(term != "(Intercept)")
+
+odds_ratios$term <- c("Age","Sex Male","MCS 1", "MCS 2","MCS 3","MCS 4",
+                      "PAI 0.5","PAI 1","PAI 0.66","PAI 0.33")
+```
+
+
+better plot:
+```{r}
+P1 <- odds_ratios %>% 
+ggplot(aes(estimate, fct_reorder(term, estimate))) +
+  geom_vline(xintercept = 1, color = "gray50", lty = 2, linewidth = 1.2) +
+  geom_errorbar(aes(
+    xmin = estimate - 1.96*std.error,
+    xmax = estimate + 1.96*std.error),width = 0.7, alpha = 0.8) +
+  geom_point(size = 2.5) +
+  labs(y = NULL, x = NULL) + ggtitle("Odds ratios from logistic regression") + 
+  theme(legend.position = "none",axis.text = element_text(size = 12),
+        plot.title = element_text(size = 16,hjust = 0.5)) + scale_x_log10()
+
+P1
+```
+
+
+```{r}
+P1
+ggsave("odds_ratios_pa1_single_cat.png", dpi = 1000)
+```
+
+```{r}
+odds_ratios$color <- as.factor(c(1,1,1,1,1,1,3,5,4,2))
+
+mycolors <- c("gray0","#A3A500" ,"#00BF7D" ,"#00B0F6", "#E76BF3")
+
+P1 <- odds_ratios %>% 
+ggplot(aes(estimate, fct_reorder(term, estimate),color = color)) +
+  geom_vline(xintercept = 1, color = "gray50", lty = 2, linewidth = 1.2) +
+  geom_errorbar(aes(
+    xmin = estimate - 1.96*std.error,
+    xmax = estimate + 1.96*std.error),width = 0.7, alpha = 0.8) +
+  geom_point(size = 2.5) +
+  scale_color_manual(values=mycolors) +
+  labs(y = NULL, x = NULL) + ggtitle("Odds ratios from logistic regression") + 
+  theme(legend.position = "none",axis.text = element_text(size = 12),
+        plot.title = element_text(size = 16,hjust = 0.5))  + scale_x_log10()
+
+P1
+```
+
+
+```{r}
+P1
+ggsave("odds_ratios_pa1_single_cat_col.png", dpi = 1000,height = 4,width)
+```
+
+```{r}
+odds_ratios$color <- as.factor(c(1,1,1,1,1,1,3,5,4,2))
+
+#FF0000	red missing in scale
+#mycolors <- c("#FF0000","#FFA700" ,"#FFF400" ,"#A3FF00" ,"#2CBA00")
+
+mycolors <- c("gray0","#FFA700" ,"#FFF400" ,"#A3FF00" ,"#2CBA00")
+
+P1 <- odds_ratios %>% 
+ggplot(aes(estimate, fct_reorder(term, estimate),color = color)) +
+  geom_vline(xintercept = 1, color = "gray50", lty = 2, linewidth = 1.2) +
+  geom_errorbar(aes(
+    xmin = estimate - 1.96*std.error,
+    xmax = estimate + 1.96*std.error),width = 0.7, alpha = 0.8) +
+  geom_point(size = 2.5) +
+  scale_color_manual(values=mycolors) +
+  labs(y = NULL, x = NULL) + ggtitle("Odds ratios from logistic regression") + 
+  theme(legend.position = "none",axis.text = element_text(size = 12),
+        plot.title = element_text(size = 16,hjust = 0.5)) + scale_x_log10()
+
+P1
+```
+
+
+```{r}
+P1
+ggsave("odds_ratios_pa1_single_cat_col_scale.png", dpi = 1000,height = 4,width = 10)
+```
+
+
+
+we can see that a high pai is clearly positively effecting the outcome of the patients
+
+as far as 0.66 we have a high unceirtainty snce we have a few realizations with that value
+
+let's gruop them into tree 0 0.33 0.5 0.66-1
+
+```{r}
+rec_3 <- recipe(labelOUT ~ ., data = df_train) %>% 
+  step_normalize(eta_Min) %>% step_cut(PAI,breaks = c(0.3,0.4,0.6),include_outside_range = FALSE) %>% 
+  step_dummy(all_nominal_predictors())
+
+wf_3 <- workflow(rec_3 %>% step_upsample(labelOUT),glm_spec)
+```
+
+```{r}
+doParallel::registerDoParallel()
+ctrl_preds <- control_resamples(save_pred = TRUE)
+rs_3 <- fit_resamples(wf_3, df_folds, control = ctrl_preds, metrics = perf)
+```
+
+```{r}
+collect_metrics(rs_3)
+```
+this is quite good: accucracy of 84% and ROC .77
+
+```{r}
+collect_predictions(rs_3) %>% group_by(id) %>% roc_curve(labelOUT,.pred_DECEDUTO) %>% autoplot()
+```
+
+fitting the model to the train data data
+
+```{r}
+fit_train <- fit(wf_3,df_train)
+```
+
+looking at the coefficients:
+
+```{r}
+tidy(fit_train)
+```
+
+all of the coefficients are significant
+
+looking at the odds ratios:
+
+```{r}
+tidy(fit_train,exponentiate=TRUE)
+```
+
+we can see that the ODDS ratio relative to the PAI is 1.55
+
+
+```{r}
+test_fit <- last_fit(wf_3,df_split,metrics = perf)
+test_fit %>% collect_metrics()
+```
+the performance does not change o the test data, no overfitting.
+
+let's investigate more:
+
+```{r}
+df_preds <- fit_train %>% augment(new_data = df_test)
+```
+
+```{r}
+df_preds %>% roc_curve(labelOUT,.pred_DECEDUTO) %>% autoplot()
+```
+
+looking at the odds ratios:
+
+```{r}
+test_fit %>% pull(.workflow) %>% pluck(1) %>% tidy(exponentiate = TRUE) %>% arrange(estimate) 
+```
+
+let's plot the coefficients
+
+```{r}
+test_fit %>% pull(.workflow) %>% pluck(1) %>% tidy() %>% 
+  filter(term != "(Intercept)") %>%
+  ggplot(aes(estimate, fct_reorder(term, estimate))) +
+  geom_vline(xintercept = 0, color = "gray50", lty = 2, linewidth = 1.2) +
+  geom_errorbar(aes(
+    xmin = estimate - 1.96*std.error,
+    xmax = estimate + 1.96*std.error),width = .7, alpha = 0.7) +
+  geom_point(size = 2) +
+  labs(y = NULL, x = "Coefficent from logistic regression")
+```
+ 
+ better plot:
+ 
+```{r}
+odds_ratios <- test_fit %>% pull(.workflow) %>% pluck(1) %>% tidy(exponentiate = TRUE) %>% 
+  filter(term != "(Intercept)") %>% filter(term !="n_drugs")
+
+odds_ratios$term <- c("Età","Sesso_M","MCS_1", "MCS_2","MCS_3","MCS_4",
+                      "PAI_0.33","PAI_0.5","PAI_[0.66,1]")
+```
+
+```{r}
+P1 <- odds_ratios %>% 
+ggplot(aes(estimate, fct_reorder(term, estimate))) +
+  geom_vline(xintercept = 1, color = "gray50", lty = 2, linewidth = 1.2) +
+  geom_errorbar(aes(
+    xmin = estimate - 1.96*std.error,
+    xmax = estimate + 1.96*std.error),width = 0.7, alpha = 0.8) +
+  geom_point(size = 2.5) +
+  labs(y = NULL, x = "Odds ratios from logistic regression") 
+P1
+```
+
+
+```{r}
+P1
+ggsave("odds_ratios_pai_cat_grouped.png", dpi = 1000)
+```
+ 
+ it looks like they have the same effects, let's try a different grouping
+ 
+```{r}
+rec_3 <- recipe(labelOUT ~ ., data = df_train) %>% 
+  step_normalize(eta_Min) %>% step_cut(PAI,breaks = c(0.1,0.4),include_outside_range = FALSE) %>% 
+  step_dummy(all_nominal_predictors())
+
+wf_3 <- workflow(rec_3 %>% step_upsample(labelOUT),glm_spec)
+```
+
+```{r}
+doParallel::registerDoParallel()
+ctrl_preds <- control_resamples(save_pred = TRUE)
+rs_3 <- fit_resamples(wf_3, df_folds, control = ctrl_preds, metrics = perf)
+```
+
+```{r}
+collect_metrics(rs_3)
+```
+this is quite good: accucracy of 84% and ROC .77
+
+```{r}
+collect_predictions(rs_3) %>% group_by(id) %>% roc_curve(labelOUT,.pred_DECEDUTO) %>% autoplot()
+```
+
+fitting the model to the train data data
+
+```{r}
+fit_train <- fit(wf_3,df_train)
+```
+
+looking at the coefficients:
+
+```{r}
+tidy(fit_train)
+```
+
+all of the coefficients are significant
+
+looking at the odds ratios:
+
+```{r}
+tidy(fit_train,exponentiate=TRUE)
+```
+
+we can see that the ODDS ratio relative to the PAI is 1.55
+
+
+```{r}
+test_fit <- last_fit(wf_3,df_split,metrics = perf)
+test_fit %>% collect_metrics()
+```
+the performance does not change o the test data, no overfitting.
+
+let's investigate more:
+
+```{r}
+df_preds <- fit_train %>% augment(new_data = df_test)
+```
+
+```{r}
+df_preds %>% roc_curve(labelOUT,.pred_DECEDUTO) %>% autoplot()
+```
+
+looking at the odds ratios:
+
+```{r}
+test_fit %>% pull(.workflow) %>% pluck(1) %>% tidy(exponentiate = TRUE) %>% arrange(estimate) 
+```
+
+let's plot the coefficients
+
+```{r}
+test_fit %>% pull(.workflow) %>% pluck(1) %>% tidy() %>% 
+  filter(term != "(Intercept)") %>%
+  ggplot(aes(estimate, fct_reorder(term, estimate))) +
+  geom_vline(xintercept = 0, color = "gray50", lty = 2, linewidth = 1.2) +
+  geom_errorbar(aes(
+    xmin = estimate - 1.96*std.error,
+    xmax = estimate + 1.96*std.error),width = .7, alpha = 0.7) +
+  geom_point(size = 2) +
+  labs(y = NULL, x = "Coefficent from logistic regression")
+```
+ 
+ even a small PAI is quite effective according to this model
+ 
+ 

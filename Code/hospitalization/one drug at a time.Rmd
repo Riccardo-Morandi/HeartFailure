@@ -1,0 +1,582 @@
+---
+title: "one grug at a time"
+output: html_notebook
+---
+
+```{r}
+library(tidyverse)
+library(tidymodels)
+library(themis)
+library(patchwork)
+```
+
+## Explore the data
+
+loading the data
+
+```{r}
+load("~/Documents/Applied Statistics/Project/Materiale_appstat/final dataframes/data.RData")
+```
+
+we want to build a logistic regression model using sesso, età, MCS, PDC, n_drugs
+
+we need some preprocesing on this covariates
+
+we compare taking at the drug in question (with or without others) ageinst the not taking it
+I don't know if thiss makes sense clinically
+
+# on the whole cohort
+
+##AA
+
+```{r}
+dfAA <- data %>% select(c(SESSO,hospitalized,eta_Min,MCS,PDC_AA))
+```
+
+we can now see the difference between drugs
+
+```{r}
+set.seed(123)
+dfAA_split <- initial_split(dfAA, strata = hospitalized)
+dfAA_train <- training(dfAA_split)
+dfAA_test <- testing(dfAA_split)
+
+set.seed(234)
+dfAA_folds <- vfold_cv(dfAA_train, strata = hospitalized)
+```
+
+```{r}
+glm_spec <- logistic_reg(engine = "glm")
+
+rec_AA <- recipe(hospitalized ~ ., data = dfAA_train) %>% 
+  step_normalize(eta_Min) %>% 
+  step_cut(starts_with("PDC"),breaks = c(0.001,0.25,0.5,0.75),include_outside_range = FALSE)
+
+wf_AA <- workflow(rec_AA %>% step_downsample(hospitalized),glm_spec)
+```
+
+```{r}
+perf <- metric_set(accuracy,
+                   sensitivity,
+                   specificity,
+                   precision,
+                   recall,
+                   roc_auc)
+
+doParallel::registerDoParallel()
+ctrl_preds <- control_resamples(save_pred = TRUE)
+rs_AA <- fit_resamples(wf_AA, dfAA_folds, control = ctrl_preds, metrics = perf)
+```
+
+```{r}
+collect_metrics(rs_AA)
+```
+
+```{r}
+collect_predictions(rs_AA) %>% group_by(id) %>% roc_curve(hospitalized,.pred_NOT_HOSPITALIZED) %>% autoplot()
+```
+
+on the test data
+
+```{r}
+test_fit <- wf_AA %>% last_fit(dfAA_split,metrics = perf) 
+```
+
+```{r}
+collect_metrics(test_fit)
+```
+
+```{r}
+test_pred <- collect_predictions(test_fit)
+```
+
+```{r}
+test_pred %>% conf_mat(hospitalized,.pred_class)
+```
+
+looking at the summary of the model
+
+```{r}
+summary(extract_fit_engine(test_fit))
+```
+
+all of the predictors seem to be influential here
+
+looking at the odds ratios:
+
+```{r}
+test_fit %>% pull(.workflow) %>% pluck(1) %>% tidy(exponentiate = TRUE) %>% arrange(estimate) 
+```
+
+let's plot the coefficients
+
+```{r}
+test_fit %>% pull(.workflow) %>% pluck(1) %>% tidy() %>% 
+  filter(term != "(Intercept)") %>%
+  ggplot(aes(estimate, fct_reorder(term, estimate))) +
+  geom_vline(xintercept = 0, color = "gray50", lty = 2, linewidth = 1.2) +
+  geom_errorbar(aes(
+    xmin = estimate - 1.96*std.error,
+    xmax = estimate + 1.96*std.error),width = .7, alpha = 0.7) +
+  geom_point(size = 2) +
+  labs(y = NULL, x = "Coefficent from logistic regression")
+```
+
+it looks like for low PDC it has a negative effect on the outcome, while in the high PDC it does not seem conclusive
+
+we do the same for the other two drugs
+
+##BB
+
+```{r}
+dfBB <- data %>% select(c(SESSO,hospitalized,eta_Min,MCS,PDC_BB))
+```
+
+we can now see the ifference between drugs
+
+```{r}
+set.seed(123)
+dfBB_split <- initial_split(dfBB, strata = hospitalized)
+dfBB_train <- training(dfBB_split)
+dfBB_test <- testing(dfBB_split)
+
+set.seed(234)
+dfBB_folds <- vfold_cv(dfBB_train, strata = hospitalized)
+```
+
+lets start by leaving the coefficients as numeric
+
+```{r}
+rec_BB <- recipe(hospitalized ~ ., data = dfBB_train) %>% 
+  step_normalize(eta_Min) %>% 
+  step_cut(starts_with("PDC"),breaks = c(0.001,0.25,0.5,0.75),include_outside_range = FALSE)
+
+wf_BB <- workflow(rec_BB %>% step_downsample(hospitalized),glm_spec)
+```
+
+```{r}
+doParallel::registerDoParallel()
+ctrl_preds <- control_resamples(save_pred = TRUE)
+rs_BB <- fit_resamples(wf_BB, dfBB_folds, control = ctrl_preds, metrics = perf)
+```
+
+```{r}
+collect_metrics(rs_BB)
+```
+
+```{r}
+collect_predictions(rs_BB) %>% group_by(id) %>% roc_curve(hospitalized,.pred_NOT_HOSPITALIZED) %>% autoplot()
+```
+
+on the test data
+
+```{r}
+test_fit <- wf_BB %>% last_fit(dfBB_split,metrics = perf) 
+```
+
+```{r}
+collect_metrics(test_fit)
+```
+
+```{r}
+test_pred <- collect_predictions(test_fit)
+```
+
+```{r}
+test_pred %>% conf_mat(hospitalized,.pred_class)
+```
+
+looking at the summary of the model
+
+```{r}
+summary(extract_fit_engine(test_fit))
+```
+
+all of the predictors seem to be influential here
+
+looking at the odds ratios:
+
+```{r}
+test_fit %>% pull(.workflow) %>% pluck(1) %>% tidy(exponentiate = TRUE) %>% arrange(estimate) 
+```
+
+let's plot the coefficients
+
+```{r}
+test_fit %>% pull(.workflow) %>% pluck(1) %>% tidy() %>% 
+  filter(term != "(Intercept)") %>%
+  ggplot(aes(estimate, fct_reorder(term, estimate))) +
+  geom_vline(xintercept = 0, color = "gray50", lty = 2, linewidth = 1.2) +
+  geom_errorbar(aes(
+    xmin = estimate - 1.96*std.error,
+    xmax = estimate + 1.96*std.error),width = .7, alpha = 0.7) +
+  geom_point(size = 2) +
+  labs(y = NULL, x = "Coefficent from logistic regression")
+```
+
+here we can see that for low adherance this is having a negative effect, while for high values it is decreasing the 
+probability of hospitalization
+
+##RAS
+
+```{r}
+dfRAS <- data %>% select(c(SESSO,hospitalized,eta_Min,MCS,PDC_RAS))
+```
+
+```{r}
+set.seed(123)
+dfRAS_split <- initial_split(dfRAS, strata = hospitalized)
+dfRAS_train <- training(dfRAS_split)
+dfRAS_test <- testing(dfRAS_split)
+
+set.seed(234)
+dfRAS_folds <- vfold_cv(dfRAS_train, strata = hospitalized)
+```
+
+
+```{r}
+rec_RAS <- recipe(hospitalized ~ ., data = dfRAS_train) %>% 
+  step_normalize(eta_Min) %>% 
+  step_cut(starts_with("PDC"),breaks = c(0.001,0.25,0.5,0.75),include_outside_range = FALSE)
+
+wf_RAS <- workflow(rec_RAS %>% step_downsample(hospitalized),glm_spec)
+```
+
+```{r}
+doParallel::registerDoParallel()
+ctrl_preds <- control_resamples(save_pred = TRUE)
+rs_RAS <- fit_resamples(wf_RAS, dfRAS_folds, control = ctrl_preds, metrics = perf)
+```
+
+```{r}
+collect_metrics(rs_RAS)
+```
+
+```{r}
+collect_predictions(rs_RAS) %>% group_by(id) %>% roc_curve(hospitalized,.pred_NOT_HOSPITALIZED) %>% autoplot()
+```
+
+on the test data
+
+```{r}
+test_fit <- wf_RAS %>% last_fit(dfRAS_split,metrics = perf) 
+```
+
+```{r}
+collect_metrics(test_fit)
+```
+
+```{r}
+test_pred <- collect_predictions(test_fit)
+```
+
+```{r}
+test_pred %>% conf_mat(hospitalized,.pred_class)
+```
+
+looking at the summary of the model
+
+```{r}
+summary(extract_fit_engine(test_fit))
+```
+
+all of the predictors seem to be influential here
+
+looking at the odds ratios:
+
+```{r}
+test_fit %>% pull(.workflow) %>% pluck(1) %>% tidy(exponentiate = TRUE) %>% arrange(estimate) 
+```
+
+let's plot the coefficients
+
+```{r}
+test_fit %>% pull(.workflow) %>% pluck(1) %>% tidy() %>% 
+  filter(term != "(Intercept)") %>%
+  ggplot(aes(estimate, fct_reorder(term, estimate))) +
+  geom_vline(xintercept = 0, color = "gray50", lty = 2, linewidth = 1.2) +
+  geom_errorbar(aes(
+    xmin = estimate - 1.96*std.error,
+    xmax = estimate + 1.96*std.error),width = .7, alpha = 0.7) +
+  geom_point(size = 2) +
+  labs(y = NULL, x = "Coefficent from logistic regression")
+```
+
+same as BB, here there seem not to be any positive effect at all
+
+# looking only at the high adherance patients
+
+to have a better comparison we look only at the patients that have high adherance to their respective protocols, ad see if the differences are the same also in this subset
+
+##AA
+
+```{r}
+dfAA <- data %>% filter(PDC_TOT > 0.75) %>% select(c(SESSO,hospitalized,eta_Min,MCS,PDC_AA))
+```
+
+we can now see the difference between drugs
+
+```{r}
+set.seed(123)
+dfAA_split <- initial_split(dfAA, strata = hospitalized)
+dfAA_train <- training(dfAA_split)
+dfAA_test <- testing(dfAA_split)
+
+set.seed(234)
+dfAA_folds <- vfold_cv(dfAA_train, strata = hospitalized)
+```
+
+```{r}
+glm_spec <- logistic_reg(engine = "glm")
+
+rec_AA <- recipe(hospitalized ~ ., data = dfAA_train) %>% 
+  step_normalize(eta_Min) %>% 
+  step_cut(starts_with("PDC"),breaks = c(0.75),include_outside_range = FALSE)
+
+wf_AA <- workflow(rec_AA %>% step_downsample(hospitalized),glm_spec)
+```
+
+```{r}
+doParallel::registerDoParallel()
+ctrl_preds <- control_resamples(save_pred = TRUE)
+rs_AA <- fit_resamples(wf_AA, dfAA_folds, control = ctrl_preds, metrics = perf)
+```
+
+```{r}
+collect_metrics(rs_AA)
+```
+
+```{r}
+collect_predictions(rs_AA) %>% group_by(id) %>% roc_curve(hospitalized,.pred_NOT_HOSPITALIZED) %>% autoplot()
+```
+
+on the test data
+
+```{r}
+test_fit <- wf_AA %>% last_fit(dfAA_split,metrics = perf) 
+```
+
+```{r}
+collect_metrics(test_fit)
+```
+
+```{r}
+test_pred <- collect_predictions(test_fit)
+```
+
+```{r}
+test_pred %>% conf_mat(hospitalized,.pred_class)
+```
+
+looking at the summary of the model
+
+```{r}
+summary(extract_fit_engine(test_fit))
+```
+
+all of the predictors seem to be influential here
+
+looking at the odds ratios:
+
+```{r}
+test_fit %>% pull(.workflow) %>% pluck(1) %>% tidy(exponentiate = TRUE) %>% arrange(estimate) 
+```
+
+let's plot the coefficients
+
+```{r}
+test_fit %>% pull(.workflow) %>% pluck(1) %>% tidy() %>% 
+  filter(term != "(Intercept)") %>%
+  ggplot(aes(estimate, fct_reorder(term, estimate))) +
+  geom_vline(xintercept = 0, color = "gray50", lty = 2, linewidth = 1.2) +
+  geom_errorbar(aes(
+    xmin = estimate - 1.96*std.error,
+    xmax = estimate + 1.96*std.error),width = .7, alpha = 0.7) +
+  geom_point(size = 2) +
+  labs(y = NULL, x = "Coefficent from logistic regression")
+```
+
+it does not seem conclusive, but no evience in favour of incuding it 
+we have a small number of datapoints that have high PDC_TOT and high pdc in this drug, this could create problem in the estimate
+
+we do the same for the other two drugs
+
+##BB
+
+```{r}
+dfBB <- data %>%  filter(PDC_TOT > 0.75) %>% select(c(SESSO,hospitalized,eta_Min,MCS,PDC_BB))
+```
+
+we can now see the ifference between drugs
+
+```{r}
+set.seed(123)
+dfBB_split <- initial_split(dfBB, strata = hospitalized)
+dfBB_train <- training(dfBB_split)
+dfBB_test <- testing(dfBB_split)
+
+set.seed(234)
+dfBB_folds <- vfold_cv(dfBB_train, strata = hospitalized)
+```
+
+lets start by leaving the coefficients as numeric
+
+```{r}
+rec_BB <- recipe(hospitalized ~ ., data = dfBB_train) %>% 
+  step_normalize(eta_Min) %>% 
+  step_cut(starts_with("PDC"),breaks = c(0.75),include_outside_range = FALSE)
+
+wf_BB <- workflow(rec_BB %>% step_downsample(hospitalized),glm_spec)
+```
+
+```{r}
+doParallel::registerDoParallel()
+ctrl_preds <- control_resamples(save_pred = TRUE)
+rs_BB <- fit_resamples(wf_BB, dfBB_folds, control = ctrl_preds, metrics = perf)
+```
+
+```{r}
+collect_metrics(rs_BB)
+```
+
+```{r}
+collect_predictions(rs_BB) %>% group_by(id) %>% roc_curve(hospitalized,.pred_NOT_HOSPITALIZED) %>% autoplot()
+```
+
+on the test data
+
+```{r}
+test_fit <- wf_BB %>% last_fit(dfBB_split,metrics = perf) 
+```
+
+```{r}
+collect_metrics(test_fit)
+```
+
+```{r}
+test_pred <- collect_predictions(test_fit)
+```
+
+```{r}
+test_pred %>% conf_mat(hospitalized,.pred_class)
+```
+
+looking at the summary of the model
+
+```{r}
+summary(extract_fit_engine(test_fit))
+```
+
+all of the predictors seem to be influential here
+
+looking at the odds ratios:
+
+```{r}
+test_fit %>% pull(.workflow) %>% pluck(1) %>% tidy(exponentiate = TRUE) %>% arrange(estimate) 
+```
+
+let's plot the coefficients
+
+```{r}
+test_fit %>% pull(.workflow) %>% pluck(1) %>% tidy() %>% 
+  filter(term != "(Intercept)") %>%
+  ggplot(aes(estimate, fct_reorder(term, estimate))) +
+  geom_vline(xintercept = 0, color = "gray50", lty = 2, linewidth = 1.2) +
+  geom_errorbar(aes(
+    xmin = estimate - 1.96*std.error,
+    xmax = estimate + 1.96*std.error),width = .7, alpha = 0.7) +
+  geom_point(size = 2) +
+  labs(y = NULL, x = "Coefficent from logistic regression")
+```
+
+also for BB we do not have enough evidence to say that it clearly improves the survival
+
+id does not seem influential,but we have a few samples with this feature
+
+##RAS
+
+```{r}
+dfRAS <- data %>% select(c(SESSO,hospitalized,eta_Min,MCS,PDC_RAS))
+```
+
+```{r}
+set.seed(123)
+dfRAS_split <- initial_split(dfRAS, strata = hospitalized)
+dfRAS_train <- training(dfRAS_split)
+dfRAS_test <- testing(dfRAS_split)
+
+set.seed(234)
+dfRAS_folds <- vfold_cv(dfRAS_train, strata = hospitalized)
+```
+
+
+```{r}
+rec_RAS <- recipe(hospitalized ~ ., data = dfRAS_train) %>% 
+  step_normalize(eta_Min) %>% 
+  step_cut(starts_with("PDC"),breaks = c(0.75),include_outside_range = FALSE)
+
+wf_RAS <- workflow(rec_RAS %>% step_downsample(hospitalized),glm_spec)
+```
+
+```{r}
+doParallel::registerDoParallel()
+ctrl_preds <- control_resamples(save_pred = TRUE)
+rs_RAS <- fit_resamples(wf_RAS, dfRAS_folds, control = ctrl_preds, metrics = perf)
+```
+
+```{r}
+collect_metrics(rs_RAS)
+```
+
+```{r}
+collect_predictions(rs_RAS) %>% group_by(id) %>% roc_curve(hospitalized,.pred_NOT_HOSPITALIZED) %>% autoplot()
+```
+
+on the test data
+
+```{r}
+test_fit <- wf_RAS %>% last_fit(dfRAS_split,metrics = perf) 
+```
+
+```{r}
+collect_metrics(test_fit)
+```
+
+```{r}
+test_pred <- collect_predictions(test_fit)
+```
+
+```{r}
+test_pred %>% conf_mat(hospitalized,.pred_class)
+```
+
+looking at the summary of the model
+
+```{r}
+summary(extract_fit_engine(test_fit))
+```
+
+all of the predictors seem to be influential here
+
+looking at the odds ratios:
+
+```{r}
+test_fit %>% pull(.workflow) %>% pluck(1) %>% tidy(exponentiate = TRUE) %>% arrange(estimate) 
+```
+
+let's plot the coefficients
+
+```{r}
+test_fit %>% pull(.workflow) %>% pluck(1) %>% tidy() %>% 
+  filter(term != "(Intercept)") %>%
+  ggplot(aes(estimate, fct_reorder(term, estimate))) +
+  geom_vline(xintercept = 0, color = "gray50", lty = 2, linewidth = 1.2) +
+  geom_errorbar(aes(
+    xmin = estimate - 1.96*std.error,
+    xmax = estimate + 1.96*std.error),width = .7, alpha = 0.7) +
+  geom_point(size = 2) +
+  labs(y = NULL, x = "Coefficent from logistic regression")
+```
+
+here wee see that the clear difference starts when we have a PDC of more than 0.75
+

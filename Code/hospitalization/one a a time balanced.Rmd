@@ -1,0 +1,347 @@
+---
+title: "one feature at a time balanced data"
+output: html_notebook
+---
+
+```{r}
+library(tidyverse)
+library(tidymodels)
+library(themis)
+library(parttree)
+library(rpart.plot)
+```
+
+```{r}
+load("~/Documents/Applied Statistics/Project/Materiale_appstat/final dataframes/data.RData")
+```
+
+focusing on the two features that we want to split into chunks
+
+```{r}
+df <- data %>% select(c(hospitalized,MCS,PDC_TOT,eta_Min))
+```
+
+balancing the data from the beginning
+
+```{r}
+df_balanced <- recipe(~., df) %>%
+    step_downsample(hospitalized, under_ratio = 1) %>%
+    prep() %>%
+    bake(new_data = NULL)
+
+table(df_balanced$hospitalized)
+```
+
+```{r}
+set.seed(123)
+df_split <- initial_split(df_balanced, strata = hospitalized)
+df_train <- training(df_split)
+df_test <- testing(df_split)
+
+set.seed(234)
+df_folds <- vfold_cv(df_train, strata = hospitalized)
+```
+
+we start only using PDC_TOT
+
+```{r}
+g1 <- ggplot(df, aes(PDC_TOT)) + geom_freqpoly(aes(colour = hospitalized),binwidth = 0.01) + 
+  theme(legend.position = "bottom")
+g2 <-df %>% ggplot(aes(y = PDC_TOT, fill = hospitalized)) + geom_histogram(binwidth = 0.01, position = "fill") + 
+    theme(legend.position = "none")
+
+g1 +g2
+```
+
+this probably will be difficult
+
+```{r}
+rec_basic <- recipe(hospitalized ~ PDC_TOT, data = df_train)
+```
+
+we want to split the PDC_TOT into at most 4 categories => tree_depth <= 3 (2 + root)
+
+```{r}
+tree_spec <- decision_tree(cost_complexity = 1e-3, tree_depth = 3, min_n = 500 ) %>% 
+  set_mode("classification") %>% set_engine("rpart")
+```
+
+```{r}
+perf <- metric_set(accuracy, sensitivity, specificity, roc_auc, precision, recall)
+ctrl_preds <- control_resamples(save_pred = TRUE)
+```
+
+```{r}
+test_rs <- last_fit(tree_spec,rec_basic,df_split,metrics = perf)
+```
+
+```{r}
+collect_metrics(test_rs)
+```
+
+```{r}
+rpart.plot(extract_fit_engine(test_rs),extra = 3,roundint = FALSE)
+```
+
+
+this feature seemed relevant also in the other experiment
+
+let's try to build a deeper tree and see what happens
+
+```{r}
+tree_spec2 <- decision_tree(cost_complexity = 1e-3, tree_depth = 4, min_n = 400 ) %>% 
+  set_mode("classification") %>% set_engine("rpart")
+```
+
+```{r}
+test_rs <- last_fit(tree_spec2,rec_basic %>% step_downsample(hospitalized),df_split,metrics = perf)
+```
+
+```{r}
+collect_metrics(test_rs)
+```
+
+```{r}
+rpart.plot(extract_fit_engine(test_rs),extra = 3,roundint = FALSE)
+```
+
+probably we shoul pick 0.15 as the threshold
+
+we do the same for MCS
+
+```{r}
+g1 <- ggplot(df,aes(MCS)) + geom_bar(aes(fill = hospitalized)) + theme(legend.position = "bottom")
+g2 <- df %>% ggplot(aes(y = MCS, fill = hospitalized)) + geom_bar(position = "fill") + theme(legend.position = "none")
+
+g1 + g2
+```
+
+
+```{r}
+rec_basic <- recipe(hospitalized ~ MCS, data = df_train)
+```
+
+we want to split the MCS into at most 4 categories => tree_depth <= 3 (2 + root)
+
+```{r}
+tree_spec <- decision_tree(cost_complexity = 1e-1, tree_depth = 3, min_n = 500 ) %>% 
+  set_mode("classification") %>% set_engine("rpart")
+```
+
+```{r}
+fit_tree <- fit_resamples(tree_spec,rec_basic %>% step_downsample(hospitalized),df_folds,metrics = perf)
+```
+
+```{r}
+collect_metrics(fit_tree)
+```
+
+```{r}
+test_rs <- last_fit(tree_spec,rec_basic %>% step_downsample(hospitalized),df_split,metrics = perf)
+```
+
+```{r}
+collect_metrics(test_rs)
+```
+
+```{r}
+rpart.plot(extract_fit_engine(test_rs),extra = 3,roundint = FALSE)
+```
+
+it seems that the biggest step is for MCS = 0-1 or 2,3,4
+
+
+let's try to build a deeper tree and see what happens
+
+```{r}
+tree_spec2 <- decision_tree(cost_complexity = 0.0, tree_depth = 5, min_n = 100) %>% 
+  set_mode("classification") %>% set_engine("rpart")
+```
+
+```{r}
+test_rs <- last_fit(tree_spec2,rec_basic ,df_split,metrics = perf)
+```
+
+```{r}
+collect_metrics(test_rs)
+```
+
+```{r}
+rpart.plot(extract_fit_engine(test_rs),extra = 3,roundint = FALSE)
+```
+
+there seem to be a difference between 0 1 and 2-3-4
+
+now i want to create the a single decision boundary for the single drug usages to potentially use in the polytherapy interaction of the logistic regression
+
+```{r}
+df2 <- data %>% select(c(hospitalized,PDC_AA,PDC_BB,PDC_RAS)) 
+df2_balanced <- recipe(~., df2) %>%
+    step_downsample(hospitalized, under_ratio = 1) %>%
+    prep() %>%
+    bake(new_data = NULL)
+
+table(df2_balanced$hospitalized)
+```
+
+```{r}
+set.seed(123)
+df2_split <- initial_split(df2_balanced, strata = hospitalized)
+df2_train <- training(df2_split)
+df2_test <- testing(df2_split)
+
+set.seed(234)
+df2_folds <- vfold_cv(df2_train, strata = hospitalized)
+```
+
+we start using PDC_AA
+
+```{r}
+g1 <- ggplot(df2, aes(PDC_AA)) + geom_histogram(aes(fill = hospitalized),binwidth = 0.05) + 
+  theme(legend.position = "none")
+
+g2 <- df2 %>% ggplot(aes(y = PDC_AA, fill = hospitalized)) + geom_histogram(binwidth = 0.01, position = "fill") +
+  theme(legend.position = "none")
+
+g1 + g2
+```
+
+this probably will be difficult
+
+```{r}
+rec_AA <- recipe(hospitalized ~ PDC_AA, data = df2_train)
+```
+
+we want to split the PDC_TOT into at most 4 categories => tree_depth <= 3 (2 + root)
+
+```{r}
+tree_spec <- decision_tree(cost_complexity = 1e-3, tree_depth = 3, min_n = 400 ) %>% 
+  set_mode("classification") %>% set_engine("rpart")
+```
+
+```{r}
+test_rs <- last_fit(tree_spec,rec_AA %>% step_downsample(hospitalized) ,df2_split,metrics = perf)
+```
+
+```{r}
+collect_metrics(test_rs)
+```
+
+```{r}
+rpart.plot(extract_fit_engine(test_rs),extra = 3,roundint = FALSE)
+```
+
+the threshols seems to be at 0.5
+
+we start using PDC_BB
+
+```{r}
+g1 <- ggplot(df2, aes(PDC_BB)) + geom_histogram(aes(fill = hospitalized),binwidth = 0.05) + 
+  theme(legend.position = "none")
+
+g2 <- df2 %>% ggplot(aes(y = PDC_BB, fill = hospitalized)) + geom_histogram(binwidth = 0.01, position = "fill") +
+  theme(legend.position = "none")
+
+g1 + g2
+```
+
+this probably will be difficult
+
+```{r}
+rec_BB <- recipe(hospitalized ~ PDC_BB, data = df2_train)
+```
+
+we want to split the PDC_TOT into at most 4 categories => tree_depth <= 3 (2 + root)
+
+```{r}
+tree_spec <- decision_tree(cost_complexity = 0.0, tree_depth = 3, min_n = 500 ) %>% 
+  set_mode("classification") %>% set_engine("rpart")
+```
+
+```{r}
+test_rs <- last_fit(tree_spec,rec_BB %>% step_downsample(hospitalized) ,df2_split,metrics = perf)
+```
+
+```{r}
+collect_metrics(test_rs)
+```
+
+```{r}
+rpart.plot(extract_fit_engine(test_rs),extra = 3,roundint = FALSE)
+```
+
+the threshold seems 0.012, very low, the others are 0.52 and 0.86
+
+we start using PDC_RAS
+
+```{r}
+g1 <- ggplot(df2, aes(PDC_RAS)) + geom_histogram(aes(fill = hospitalized),binwidth = 0.05) + 
+  theme(legend.position = "none")
+
+g2 <- df2 %>% ggplot(aes(y = PDC_RAS, fill = hospitalized)) + geom_histogram(binwidth = 0.01, position = "fill") +
+  theme(legend.position = "none")
+
+g1 + g2
+```
+
+
+```{r}
+rec_RAS <- recipe(hospitalized ~ PDC_RAS, data = df2_train)
+```
+
+we want to split the PDC into at most 4 categories => tree_depth <= 3 (2 + root)
+
+```{r}
+tree_spec <- decision_tree(cost_complexity = 0.0, tree_depth = 3, min_n = 500 ) %>% 
+  set_mode("classification") %>% set_engine("rpart")
+```
+
+```{r}
+test_rs <- last_fit(tree_spec,rec_RAS %>% step_downsample(hospitalized) ,df2_split,metrics = perf)
+```
+
+```{r}
+collect_metrics(test_rs)
+```
+
+```{r}
+rpart.plot(extract_fit_engine(test_rs),extra = 3,roundint = FALSE)
+```
+
+here there seem to be a cutoff at either 82 or 0.94
+
+for eta
+
+```{r}
+g1 <- ggplot(df, aes(eta_Min)) + geom_histogram(aes(fill = hospitalized),binwidth = 1) + 
+  theme(legend.position = "none")
+
+g2 <- df %>% ggplot(aes(y = eta_Min, fill = hospitalized)) + geom_histogram(binwidth = 1, position = "fill") +
+  theme(legend.position = "none")
+
+g1 + g2
+```
+
+```{r}
+rec_eta <- recipe(hospitalized ~ eta_Min, data = df_train)
+```
+
+```{r}
+tree_spec <- decision_tree(cost_complexity = 1e-3, tree_depth = 3, min_n = 100 ) %>% 
+  set_mode("classification") %>% set_engine("rpart")
+```
+
+```{r}
+test_rs <- last_fit(tree_spec,rec_eta %>% step_downsample(hospitalized) ,df_split,metrics = perf)
+```
+
+```{r}
+collect_metrics(test_rs)
+```
+
+```{r}
+rpart.plot(extract_fit_engine(test_rs),extra = 3,roundint = FALSE)
+```
+
+the step seems to be at 84
+

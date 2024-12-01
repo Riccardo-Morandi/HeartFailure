@@ -1,0 +1,426 @@
+---
+title: "logistic regression PAI"
+output: html_notebook
+---
+
+let's start by fitting a logistic regression on our data
+starting from the total adherence measured via PAI
+
+```{r}
+library(tidyverse)
+library(tidymodels)
+library(themis)
+library(patchwork)
+```
+
+loading the data
+
+```{r}
+load("~/Documents/Applied Statistics/Project/Materiale_appstat/final dataframes/data.RData")
+```
+
+```{r}
+glimpse(data)
+```
+
+we want to build a logistic regression model using sesso, età, MCS, PAI, n_drugs
+
+we need some preprocesing on this covariates
+
+```{r}
+df <- data %>% select(c(SESSO,hospitalized,eta_Min,MCS,PAI,n_drugs))
+```
+
+let's look at the PAI 
+
+```{r}
+ggplot(df,aes(as.factor(PAI))) + geom_bar(aes(fill = hospitalized))
+```
+I will keep it as a number, but possibly group it and use the groupped variable
+
+first we keep this as a double, then we will group it
+
+# logisic regression 
+
+## the basic model
+
+stratified k_fold cross-validation on hospitalized
+
+```{r}
+set.seed(123)
+df_split <- initial_split(df, strata = hospitalized)
+df_train <- training(df_split)
+df_test <- testing(df_split)
+
+set.seed(234)
+df_folds <- vfold_cv(df_train, strata = hospitalized)
+
+```
+
+```{r}
+glm_spec <- logistic_reg(engine = "glm")
+
+rec_paper <- recipe(hospitalized ~ ., data = df_train) %>% 
+  step_normalize(eta_Min) %>% 
+  step_dummy(all_nominal_predictors())
+
+wf_paper <- workflow(rec_paper %>% step_upsample(hospitalized),glm_spec)
+```
+
+```{r}
+perf <- metric_set(accuracy,
+                   sensitivity,
+                   specificity,
+                   precision,
+                   recall,
+                   roc_auc)
+
+doParallel::registerDoParallel()
+ctrl_preds <- control_resamples(save_pred = TRUE)
+rs_basic <- fit_resamples(wf_paper, df_folds, control = ctrl_preds, metrics = perf)
+```
+
+```{r}
+collect_metrics(rs_basic)
+```
+this is quite good: accucracy of 84% and ROC .77
+
+```{r}
+collect_predictions(rs_basic) %>% group_by(id) %>% roc_curve(hospitalized,.pred_NOT_HOSPITALIZED) %>% autoplot()
+```
+
+fitting the model to the train data data
+
+```{r}
+fit_train <- fit(wf_paper,df_train)
+```
+
+looking at the coefficients:
+
+```{r}
+tidy(fit_train)
+```
+
+all of the coefficients are significant
+
+looking at the odds ratios:
+
+```{r}
+tidy(fit_train,exponentiate=TRUE)
+```
+
+we can see that the ODDS ratio relative to the PAI is 0.65, which is quite high, keeping in mind that this is numeric here still
+
+
+```{r}
+test_fit <- last_fit(wf_paper,df_split,metrics = perf)
+test_fit %>% collect_metrics()
+```
+the performance does not change o the test data, no overfitting.
+
+let's investigate more:
+
+```{r}
+df_preds <- fit_train %>% augment(new_data = df_test)
+```
+
+```{r}
+df_preds %>% roc_curve(hospitalized,.pred_NOT_HOSPITALIZED) %>% autoplot()
+```
+
+looking at the odds ratios:
+
+```{r}
+test_fit %>% pull(.workflow) %>% pluck(1) %>% tidy(exponentiate = TRUE) %>% arrange(estimate) 
+```
+
+let's plot the coefficients
+
+```{r}
+test_fit %>% pull(.workflow) %>% pluck(1) %>% tidy() %>% 
+  filter(term != "(Intercept)") %>%
+  ggplot(aes(estimate, fct_reorder(term, estimate))) +
+  geom_vline(xintercept = 0, color = "gray50", lty = 2, linewidth = 1.2) +
+  geom_errorbar(aes(
+    xmin = estimate - 1.96*std.error,
+    xmax = estimate + 1.96*std.error),width = .7, alpha = 0.7) +
+  geom_point(size = 2) +
+  labs(y = NULL, x = "Coefficent from logistic regression")
+```
+ 
+PAI is clearly significant
+let's treat it as a factor and see if we can find differences
+
+```{r}
+df2 <- data %>% select(c(SESSO,hospitalized,eta_Min,MCS,PAI,n_drugs))
+df2$PAI <- as.factor(df2$PAI)
+```
+ 
+```{r}
+set.seed(123)
+df2_split <- initial_split(df2, strata = hospitalized)
+df2_train <- training(df2_split)
+df2_test <- testing(df2_split)
+
+set.seed(234)
+df2_folds <- vfold_cv(df2_train, strata = hospitalized)
+```
+ 
+```{r}
+rec2 <- recipe(hospitalized ~ ., data = df2_train) %>% 
+  step_normalize(eta_Min) %>%
+  step_dummy(all_nominal_predictors())
+
+wf2 <- workflow(rec2 %>% step_upsample(hospitalized),glm_spec)
+```
+
+```{r}
+doParallel::registerDoParallel()
+ctrl_preds <- control_resamples(save_pred = TRUE)
+rs2 <- fit_resamples(wf2, df2_folds, control = ctrl_preds, metrics = perf)
+```
+
+```{r}
+collect_metrics(rs2)
+```
+this is quite good: accucracy of 66% and ROC .74
+
+```{r}
+collect_predictions(rs2) %>% group_by(id) %>% roc_curve(hospitalized,.pred_NOT_HOSPITALIZED) %>% autoplot()
+```
+
+fitting the model to the train data data
+
+```{r}
+fit_train <- fit(wf2,df2_train)
+```
+
+looking at the coefficients:
+
+```{r}
+tidy(fit_train)
+```
+
+all of the coefficients are significant
+
+looking at the odds ratios:
+
+```{r}
+tidy(fit_train,exponentiate=TRUE)
+```
+
+we can see that the ODDS ratio relative to the PAI are low
+
+### evaluation on test data
+
+```{r}
+test_fit <- last_fit(wf2,df2_split,metrics = perf)
+test_fit %>% collect_metrics()
+```
+the performance does not change o the test data, no overfitting.
+
+let's investigate more:
+
+```{r}
+df_preds <- fit_train %>% augment(new_data = df2_test)
+```
+
+```{r}
+df_preds %>% roc_curve(hospitalized,.pred_NOT_HOSPITALIZED) %>% autoplot()
+```
+
+looking at the odds ratios:
+
+```{r}
+test_fit %>% pull(.workflow) %>% pluck(1) %>% tidy(exponentiate = TRUE) %>% arrange(estimate) 
+```
+
+let's plot the coefficients
+
+```{r}
+test_fit %>% pull(.workflow) %>% pluck(1) %>% tidy() %>% 
+  filter(term != "(Intercept)") %>%
+  ggplot(aes(estimate, fct_reorder(term, estimate))) +
+  geom_vline(xintercept = 0, color = "gray50", lty = 2, linewidth = 1.2) +
+  geom_errorbar(aes(
+    xmin = estimate - 1.96*std.error,
+    xmax = estimate + 1.96*std.error),width = .7, alpha = 0.7) +
+  geom_point(size = 2) +
+  labs(y = NULL, x = "Coefficent from logistic regression")
+```
+
+we can see that a high pai is clearly positively effecting the outcome of the patients
+
+as far as 0.66 we have a high unceirtainty snce we have a few realizations with that value
+
+let's gruop them into tree 0-0.33 0.5 0.66-1
+
+```{r}
+rec_3 <- recipe(hospitalized ~ ., data = df_train) %>% 
+  step_normalize(eta_Min) %>% step_cut(PAI,breaks = c(0.4,0.6),include_outside_range = FALSE) %>% 
+  step_dummy(all_nominal_predictors())
+
+wf_3 <- workflow(rec_3 %>% step_upsample(hospitalized),glm_spec)
+```
+
+```{r}
+doParallel::registerDoParallel()
+ctrl_preds <- control_resamples(save_pred = TRUE)
+rs_3 <- fit_resamples(wf_3, df_folds, control = ctrl_preds, metrics = perf)
+```
+
+```{r}
+collect_metrics(rs_3)
+```
+this is quite good: accucracy of 84% and ROC .77
+
+```{r}
+collect_predictions(rs_3) %>% group_by(id) %>% roc_curve(hospitalized,.pred_NOT_HOSPITALIZED) %>% autoplot()
+```
+
+fitting the model to the train data data
+
+```{r}
+fit_train <- fit(wf_3,df_train)
+```
+
+looking at the coefficients:
+
+```{r}
+tidy(fit_train)
+```
+
+all of the coefficients are significant
+
+looking at the odds ratios:
+
+```{r}
+tidy(fit_train,exponentiate=TRUE)
+```
+
+we can see that the ODDS ratio relative to the PAI is 0.75
+
+
+```{r}
+test_fit <- last_fit(wf_3,df_split,metrics = perf)
+test_fit %>% collect_metrics()
+```
+the performance does not change o the test data, no overfitting.
+
+let's investigate more:
+
+```{r}
+df_preds <- fit_train %>% augment(new_data = df_test)
+```
+
+```{r}
+df_preds %>% roc_curve(hospitalized,.pred_NOT_HOSPITALIZED) %>% autoplot()
+```
+
+looking at the odds ratios:
+
+```{r}
+test_fit %>% pull(.workflow) %>% pluck(1) %>% tidy(exponentiate = TRUE) %>% arrange(estimate) 
+```
+
+let's plot the coefficients
+
+```{r}
+test_fit %>% pull(.workflow) %>% pluck(1) %>% tidy() %>% 
+  filter(term != "(Intercept)") %>%
+  ggplot(aes(estimate, fct_reorder(term, estimate))) +
+  geom_vline(xintercept = 0, color = "gray50", lty = 2, linewidth = 1.2) +
+  geom_errorbar(aes(
+    xmin = estimate - 1.96*std.error,
+    xmax = estimate + 1.96*std.error),width = .7, alpha = 0.7) +
+  geom_point(size = 2) +
+  labs(y = NULL, x = "Coefficent from logistic regression")
+```
+ 
+ it looks like they have the same effects, let's try a different grouping
+ 
+```{r}
+rec_3 <- recipe(hospitalized ~ ., data = df_train) %>% 
+  step_normalize(eta_Min) %>% step_cut(PAI,breaks = c(0.1,0.4),include_outside_range = FALSE) %>% 
+  step_dummy(all_nominal_predictors())
+
+wf_3 <- workflow(rec_3 %>% step_upsample(hospitalized),glm_spec)
+```
+
+```{r}
+doParallel::registerDoParallel()
+ctrl_preds <- control_resamples(save_pred = TRUE)
+rs_3 <- fit_resamples(wf_3, df_folds, control = ctrl_preds, metrics = perf)
+```
+
+```{r}
+collect_metrics(rs_3)
+```
+this is quite good: accucracy of 84% and ROC .77
+
+```{r}
+collect_predictions(rs_3) %>% group_by(id) %>% roc_curve(hospitalized,.pred_NOT_HOSPITALIZED) %>% autoplot()
+```
+
+fitting the model to the train data data
+
+```{r}
+fit_train <- fit(wf_3,df_train)
+```
+
+looking at the coefficients:
+
+```{r}
+tidy(fit_train)
+```
+
+all of the coefficients are significant
+
+looking at the odds ratios:
+
+```{r}
+tidy(fit_train,exponentiate=TRUE)
+```
+
+we can see that the ODDS ratio relative to the PAI is 0.8 and 0.73
+
+
+```{r}
+test_fit <- last_fit(wf_3,df_split,metrics = perf)
+test_fit %>% collect_metrics()
+```
+the performance does not change o the test data, no overfitting.
+
+let's investigate more:
+
+```{r}
+df_preds <- fit_train %>% augment(new_data = df_test)
+```
+
+```{r}
+df_preds %>% roc_curve(hospitalized,.pred_NOT_HOSPITALIZED) %>% autoplot()
+```
+
+looking at the odds ratios:
+
+```{r}
+test_fit %>% pull(.workflow) %>% pluck(1) %>% tidy(exponentiate = TRUE) %>% arrange(estimate) 
+```
+
+let's plot the coefficients
+
+```{r}
+test_fit %>% pull(.workflow) %>% pluck(1) %>% tidy() %>% 
+  filter(term != "(Intercept)") %>%
+  ggplot(aes(estimate, fct_reorder(term, estimate))) +
+  geom_vline(xintercept = 0, color = "gray50", lty = 2, linewidth = 1.2) +
+  geom_errorbar(aes(
+    xmin = estimate - 1.96*std.error,
+    xmax = estimate + 1.96*std.error),width = .7, alpha = 0.7) +
+  geom_point(size = 2) +
+  labs(y = NULL, x = "Coefficent from logistic regression")
+```
+ 
+ even a small PAI is quite effective according to this model
+ 
+ 

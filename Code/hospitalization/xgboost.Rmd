@@ -1,0 +1,343 @@
+---
+title: "xgboost trial"
+output: html_notebook
+---
+
+the idea is to use an xgboost algorithm to reduce the bias of the model that was quite high in the models seen so far
+and use info derived from here to get insight on how to better model the data in the more interpretable models
+
+```{r}
+library(tidyverse)
+library(tidymodels)
+library(themis)
+library(patchwork)
+library(finetune)
+```
+
+```{r}
+load("~/Documents/Applied Statistics/Project/Materiale_appstat/final dataframes/data.RData")
+```
+
+```{r}
+df <- data %>% select(c(SESSO,hospitalized,eta_Min,MCS,PDC_TOT,n_drugs))
+```
+
+stratified k_fold cross-validation on hospitalized
+
+```{r}
+df_balanced <- recipe(~., df) %>%
+    step_downsample(hospitalized, under_ratio = 1) %>%
+    prep() %>%
+    bake(new_data = NULL)
+
+table(df_balanced$hospitalized)
+
+set.seed(123)
+df_split <- initial_split(df_balanced, strata = hospitalized)
+df_train <- training(df_split)
+df_test <- testing(df_split)
+
+set.seed(234)
+df_folds <- vfold_cv(df_train, strata = hospitalized)
+```
+
+xgboost works only with numerical predictor and prefers one-hot encoding, so we follow this in the def of the recepie
+
+```{r}
+rec_xgb <- recipe(hospitalized ~ ., data = df_train) %>% step_dummy(all_nominal_predictors(), one_hot = TRUE)
+```
+
+we need to tune the hyperparameters, let's start with this, will try to do better if needed maybe using space filling grids 
+
+```{r}
+xgb_spec <- boost_tree(
+  trees = tune(),
+  tree_depth = tune(), min_n = tune(),
+  loss_reduction = tune(),                     ## first three: model complexity
+  sample_size = tune(), mtry = tune(),         ## randomness
+  learn_rate = 0.01                          ## step size
+) %>%
+  set_engine("xgboost") %>%
+  set_mode("classification")
+
+xgb_wf <- workflow(rec_xgb, xgb_spec)
+
+xgb_wf
+```
+
+defining performance metris to compute for evaluations
+
+```{r}
+perf <- metric_set(accuracy, sensitivity, specificity, precision, recall, roc_auc)
+```
+
+```{r}
+xgb_grid <- grid_latin_hypercube(
+  trees(),
+  tree_depth(),
+  min_n(),
+  loss_reduction(),
+  sample_size = sample_prop(),
+  finalize(mtry(), df_train),
+  size = 10
+)
+
+```
+
+```{r}
+doParallel::registerDoParallel()
+
+set.seed(234)
+xgb_res <- tune_grid(
+  xgb_wf,
+  resamples = df_folds,
+  grid = xgb_grid,
+  control = control_grid(save_pred = TRUE)
+)
+
+```
+
+```{r}
+xgb_res %>%
+  collect_metrics() %>%
+  filter(.metric == "roc_auc") %>%
+  select(mean, mtry:sample_size) %>%
+  pivot_longer(mtry:sample_size,
+               values_to = "value",
+               names_to = "parameter"
+  ) %>%
+  ggplot(aes(value, mean, color = parameter)) +
+  geom_point(alpha = 0.8, show.legend = FALSE) +
+  facet_wrap(~parameter, scales = "free_x") +
+  labs(x = NULL, y = "AUC")
+```
+
+the performances are not the best
+
+```{r}
+xgb_last <-
+  xgb_wf %>%
+  finalize_workflow(select_best(xgb_res, "accuracy")) %>%
+  last_fit(df_split,metrics = perf)
+```
+
+```{r}
+collect_metrics(xgb_last)
+```
+
+
+using the race method
+
+```{r}
+xgb_spec <-
+  boost_tree(
+    trees = 500,
+    min_n = tune(),
+    mtry = tune(),
+    learn_rate = tune()
+  ) %>%
+  set_engine("xgboost") %>%
+  set_mode("classification")
+
+xgb_wf <- workflow(rec_xgb, xgb_spec)
+```
+
+
+```{r}
+doParallel::registerDoParallel()
+
+set.seed(345)
+xgb_rs <- tune_race_anova(
+  xgb_wf,
+  resamples = df_folds,
+  grid = 15,
+  metrics = perf,
+  control = control_race(verbose_elim = TRUE)
+)
+```
+
+```{r}
+plot_race(xgb_rs)
+```
+
+
+```{r}
+autoplot(xgb_rs,metric = c("accuracy","sensitivity","specificity"))
+```
+
+```{r}
+xgb_last <-
+  xgb_wf %>%
+  finalize_workflow(select_best(xgb_rs, "accuracy")) %>%
+  last_fit(df_split,metrics = perf)
+```
+
+```{r}
+collect_metrics(xgb_last)
+```
+
+```{r}
+collect_predictions(xgb_last) %>%  conf_mat(hospitalized,.pred_class)
+```
+
+same old problem
+
+```{r}
+library(vip)
+
+xgb_fit <- extract_fit_parsnip(xgb_last)
+vip(xgb_fit, geom = "point")
+```
+
+```{r}
+
+library(DALEXtra)
+
+xgb_explainer <- explain_tidymodels(
+  extract_workflow(xgb_last),
+  data = dplyr::select(df_train, -hospitalized),
+  y = as.integer(df_train$hospitalized),
+  verbose = TRUE
+)
+```
+
+```{r}
+pdp_pdc <- model_profile(
+  xgb_explainer,
+  variables = c("PDC_TOT","eta_Min"),
+  N = 500
+)
+```
+
+```{r}
+ggplot_pdp <- function(obj, x) {
+  
+  p <- 
+    as_tibble(obj$agr_profiles) %>%
+    mutate(`_label_` = stringr::str_remove(`_label_`, "^[^_]*_")) %>%
+    ggplot(aes(`_x_`, `_yhat_`)) +
+    geom_line(data = as_tibble(obj$cp_profiles),
+              aes(x = {{ x }}, group = `_ids_`),
+              linewidth = 0.5, alpha = 0.1, color = "gray50")
+  
+  num_colors <- n_distinct(obj$agr_profiles$`_label_`)
+  
+  if (num_colors > 1) {
+    p <- p + geom_line(aes(color = `_label_`), linewidth = 1.2, alpha = 0.8)
+  } else {
+    p <- p + geom_line(color = "midnightblue", linewidth = 1.2, alpha = 0.8)
+  }
+  
+  p
+}
+```
+
+```{r}
+ggplot_pdp(pdp_pdc, PDC_TOT)  +
+  labs(
+    x = "Total PDC",
+    y = "Predicted probability survival",
+    color = NULL,
+    title = "Partial dependence plot for survival based on PDC",
+  ) + xlim(c(0,1))
+```
+
+```{r}
+ggplot_pdp(pdp_pdc, eta_Min)  +
+  labs(
+    x = "age",
+    y = "Predicted probability survival",
+    color = NULL,
+    title = "Partial dependence plot for survival based on age",
+  ) + xlim(c(50,100))
+```
+
+```{r}
+library(SHAPforxgboost)
+
+rec_prep <- prep(rec_xgb)
+#bake(rec_prep, new_data = NULL) %>% str()
+
+xgb_shap <-
+  shap.prep(
+    xgb_model = extract_fit_engine(xgb_fit),
+    X_train = bake(rec_prep,
+      has_role("predictor"),
+      new_data = NULL,
+      composition = "matrix"
+    )
+  )
+```
+
+```{r}
+shap.plot.summary(xgb_shap)
+```
+
+```{r}
+shap.plot.dependence(
+  xgb_shap,
+  x = "eta_Min",
+  color_feature = "auto",
+  size0 = 1.2,
+  smooth = FALSE, add_hist = TRUE
+)
+```
+ this also tells me taht the strongest interaction is with the MCS1
+ we see an inversion which is interesting
+
+let's invert the roles
+
+```{r}
+shap.plot.dependence(
+  xgb_shap,
+  x = "eta_Min",
+  color_feature = "PDC_TOT",
+  size0 = 1.2,
+  smooth = FALSE, add_hist = TRUE
+)
+```
+
+let's look at PDC_TOT
+
+```{r}
+shap.plot.dependence(
+  xgb_shap,
+  x = "PDC_TOT",
+  color_feature = "PDC_TOT",
+  size0 = 1.2,
+  smooth = FALSE, add_hist = TRUE
+)
+```
+
+```{r}
+shap.plot.dependence(
+  xgb_shap,
+  x = "PDC_TOT",
+  color_feature = "auto",
+  size0 = 1.2,
+  smooth = FALSE, add_hist = TRUE
+)
+```
+
+```{r}
+shap.plot.dependence(
+  xgb_shap,
+  x = "PDC_TOT",
+  color_feature = "eta_Min",
+  size0 = 1.2,
+  smooth = FALSE, add_hist = TRUE
+)
+```
+
+```{r}
+shap.plot.dependence(
+  xgb_shap,
+  x = "eta_Min",
+  y = "PDC_TOT",
+  color_feature = "PDC_TOT",
+  size0 = 1.2,
+  smooth = FALSE, add_hist = TRUE
+)
+```
+
+still no iteraction

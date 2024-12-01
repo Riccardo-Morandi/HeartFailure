@@ -1,0 +1,193 @@
+---
+title: "fpca logistic regr"
+author: "Riccardo Morandi"
+date: "2023-06-25"
+output: html_document
+---
+set up:
+
+```{r}
+setwd("/Users/macbookpro/Documents/Applied Statistics/Project/Materiale_appstat/Code/Functional/")
+load("~/Documents/Applied Statistics/Project/Materiale_appstat/Code/Functional/PDC_TOT.RData")
+load("~/Documents/Applied Statistics/Project/Materiale_appstat/Code/Functional/pazienti.RData")
+load("~/Documents/Applied Statistics/Project/Materiale_appstat/final dataframes/data.RData")
+library(tidyverse)
+library(tidymodels)
+library(fda)
+library(fields)
+```
+
+
+```{r}
+time <- 1:365
+data_W=PDC_TOT
+
+basis <- create.bspline.basis(rangeval=range(time),nbasis=80,norder=5)
+
+data_W.fd.1 <- Data2fd(y = data_W,argvals = time,basisobj = basis)
+plot.fd(data_W.fd.1[1:10], main="B-splines")
+```
+
+
+```{r}
+pca_W.1 <- pca.fd(data_W.fd.1,nharm=5,centerfns=TRUE)
+
+plot(pca_W.1$values[1:35],xlab='j',ylab='Eigenvalues')
+plot(cumsum(pca_W.1$values)[1:35]/sum(pca_W.1$values),xlab='j',ylab='Contribution to the total variance',ylim=c(0.8,1))
+```
+
+
+```{r}
+#Explained variance
+(pca_W.1$values)[1:5]/sum(pca_W.1$values)
+```
+
+
+```{r}
+# Command of the library fda that automatically does these plots
+par(mfrow=c(1,3))
+plot(pca_W.1, nx=100, pointplot=TRUE, harm=c(1,2,3), expand=0, cycle=FALSE)
+```
+
+
+```{r}
+# scatter plot of the scores
+par(mfrow=c(1,1))
+plot(pca_W.1$scores[,1],pca_W.1$scores[,2],xlab="Scores FPC1",ylab="Scores FPC2",lwd=2)
+
+
+#Coloro in base a la variabile label_out
+codici=pazienti$labelOUT
+dim(sequenze_PDC_totale)
+col=rep('red',12588)
+col[which(codici=='DECEDUTO')]='green'
+# scatter plot of the scores
+par(mfrow=c(1,1))
+plot(pca_W.1$scores[,2],pca_W.1$scores[,3],xlab="Scores FPC1",ylab="Scores FPC2",lwd=2, col=col)
+
+```
+
+```{r}
+codes <- pazienti$CODREG
+retained_patients <- data[data$COD_REG %in% codes,]
+retained_patients$fpca1 <- pca_W.1$scores[,1]
+retained_patients$fpca2 <- pca_W.1$scores[,2]
+retained_patients$fpca3 <- pca_W.1$scores[,3]
+```
+
+```{r}
+df <- retained_patients[,c(3,6,7,8,14,20,21,22)]
+```
+
+stratified k_fold cross-validation on labelout
+
+```{r}
+set.seed(123)
+df_split <- initial_split(df, strata = labelOUT)
+df_train <- training(df_split)
+df_test <- testing(df_split)
+
+set.seed(234)
+df_folds <- vfold_cv(df_train, strata = labelOUT)
+
+```
+
+```{r}
+glm_spec <- logistic_reg(engine = "glm")
+
+rec_paper <- recipe(labelOUT ~ ., data = df_train) %>% 
+  step_normalize(all_numeric_predictors()) %>% step_dummy(all_nominal_predictors())
+
+wf_paper <- workflow(rec_paper,glm_spec)
+```
+
+```{r}
+perf <- metric_set(accuracy,
+                   sensitivity,
+                   specificity,
+                   precision,
+                   recall,
+                   roc_auc)
+
+doParallel::registerDoParallel()
+ctrl_preds <- control_resamples(save_pred = TRUE)
+rs_basic <- fit_resamples(wf_paper, df_folds, control = ctrl_preds, metrics = perf)
+```
+
+```{r}
+collect_metrics(rs_basic)
+```
+
+
+```{r}
+collect_predictions(rs_basic) %>% group_by(id) %>% roc_curve(labelOUT,.pred_DECEDUTO) %>% autoplot()
+```
+
+fitting the model to the train data data
+
+```{r}
+fit_train <- fit(wf_paper,df_train)
+```
+
+looking at the coefficients:
+
+```{r}
+tidy(fit_train)
+```
+
+all of the coefficients are significant
+
+looking at the odds ratios:
+
+```{r}
+tidy(fit_train,exponentiate=TRUE)
+```
+
+we can see that the ODDS ratio relative to the PDC_TOT is 1.94
+
+### evaluation on test data
+
+```{r}
+test_fit <- last_fit(wf_paper,df_split,metrics = perf)
+test_fit %>% collect_metrics()
+```
+the performance does not change o the test data, no overfitting.
+
+let's investigate more:
+
+```{r}
+df_preds <- fit_train %>% augment(new_data = df_test)
+```
+
+```{r}
+df_preds %>% roc_curve(labelOUT,.pred_DECEDUTO) %>% autoplot()
+```
+
+looking at the odds ratios:
+
+```{r}
+test_fit %>% pull(.workflow) %>% pluck(1) %>% tidy(exponentiate = TRUE) %>% arrange(estimate) 
+```
+
+we can see that the odds ration for the PDC terms are significant and are 1.21 and 1.32
+
+let's plot the coefficients
+
+```{r}
+test_fit %>% pull(.workflow) %>% pluck(1) %>% tidy() %>% 
+  filter(term != "(Intercept)") %>%
+  ggplot(aes(estimate, fct_reorder(term, estimate))) +
+  geom_vline(xintercept = 0, color = "gray50", lty = 2, linewidth = 1.2) +
+  geom_errorbar(aes(
+    xmin = estimate - 1.96*std.error,
+    xmax = estimate + 1.96*std.error),width = .7, alpha = 0.7) +
+  geom_point(size = 2) +
+  labs(y = NULL, x = "Coefficent from logistic regression")
+```
+ 
+
+
+
+
+
+

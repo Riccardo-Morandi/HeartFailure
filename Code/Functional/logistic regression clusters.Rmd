@@ -1,0 +1,218 @@
+---
+title: "logistics regression clusters"
+output: html_notebook
+---
+
+let's start by fitting a logistic regression on our data
+starting from the total adherence measured via PDC
+
+```{r}
+library(tidyverse)
+library(tidymodels)
+library(themis)
+library(patchwork)
+```
+
+## Explore the data
+
+loading the data
+
+```{r}
+load("~/Documents/Applied Statistics/Project/Materiale_appstat/Code/Functional/data_with_clusters.RData")
+```
+
+```{r}
+glimpse(data_with_clusters)
+```
+
+we want to build a logistic regression model using sesso, età, MCS, PDC_tot
+
+we need some preprocesing on this covariates
+
+```{r}
+df <- data_with_clusters %>% select(c(SESSO,labelOUT,eta_Min,MCS,cluster))
+df$cluster <- as.factor(df$cluster)
+df$labelOUT <- relevel(df$labelOUT,"TRONCATO")
+```
+
+```{r}
+ggplot(data_with_clusters, aes(cluster)) + geom_bar(aes(fill = labelOUT),binwidth = 0.8)
+```
+
+# logisic regression 
+
+## the basic model
+
+stratified k_fold cross-validation on labelout
+
+```{r}
+set.seed(123)
+df_split <- initial_split(df, strata = labelOUT)
+df_train <- training(df_split)
+df_test <- testing(df_split)
+
+set.seed(234)
+df_folds <- vfold_cv(df_train, strata = labelOUT)
+```
+
+```{r}
+glm_spec <- logistic_reg(engine = "glm")
+
+rec_paper <- recipe(labelOUT ~ ., data = df_train) %>% 
+  step_normalize(eta_Min) %>% 
+  step_dummy(all_nominal_predictors())
+
+wf_paper <- workflow(rec_paper %>% step_upsample(labelOUT),glm_spec)
+```
+
+```{r}
+perf <- metric_set(accuracy,
+                   sensitivity,
+                   specificity,
+                   precision,
+                   recall,
+                   roc_auc)
+
+doParallel::registerDoParallel()
+ctrl_preds <- control_resamples(save_pred = TRUE)
+rs_basic <- fit_resamples(wf_paper, df_folds, control = ctrl_preds, metrics = perf)
+```
+
+```{r}
+collect_metrics(rs_basic)
+```
+this is quite good: accucracy of 84% and ROC .77
+
+```{r}
+collect_predictions(rs_basic) %>% group_by(id) %>% roc_curve(labelOUT,.pred_DECEDUTO) %>% autoplot()
+```
+
+fitting the model to the train data data
+
+```{r}
+fit_train <- fit(wf_paper,df_train)
+```
+
+looking at the coefficients:
+
+```{r}
+tidy(fit_train)
+```
+
+all of the coefficients are significant
+
+looking at the odds ratios:
+
+```{r}
+tidy(fit_train,exponentiate=TRUE)
+```
+
+we can see that the ODDS ratio relative to the PDC_TOT is 1.94
+
+### evaluation on test data
+
+```{r}
+test_fit <- last_fit(wf_paper,df_split,metrics = perf)
+test_fit %>% collect_metrics()
+```
+the performance does not change o the test data, no overfitting.
+
+let's investigate more:
+
+```{r}
+df_preds <- fit_train %>% augment(new_data = df_test)
+```
+
+```{r}
+df_preds %>% roc_curve(labelOUT,.pred_DECEDUTO) %>% autoplot()
+```
+
+looking at the odds ratios:
+
+```{r}
+test_fit %>% pull(.workflow) %>% pluck(1) %>% tidy(exponentiate = FALSE) %>% arrange(estimate) 
+```
+
+we can see that the odds ration for the PDC terms are significant and are 1.21 and 1.32
+
+let's plot the coefficients
+
+```{r}
+test_fit %>% pull(.workflow) %>% pluck(1) %>% tidy() %>% 
+  filter(term != "(Intercept)") %>% filter(term != "n_drugs") %>% 
+  ggplot(aes(estimate, fct_reorder(term, estimate))) +
+  geom_vline(xintercept = 0, color = "gray50", lty = 2, linewidth = 1.2) +
+  geom_errorbar(aes(
+    xmin = estimate - 1.96*std.error,
+    xmax = estimate + 1.96*std.error),width = .7, alpha = 0.7) +
+  geom_point(size = 2) +
+  labs(y = NULL, x = "Coefficent from logistic regression")
+```
+ 
+ plotting the odds ratio
+ 
+```{r}
+test_fit %>% pull(.workflow) %>% pluck(1) %>% tidy(exponentiate = TRUE) %>% 
+  filter(term != "(Intercept)") %>% 
+  ggplot(aes(estimate, fct_reorder(term, estimate))) +
+  geom_vline(xintercept = 1, color = "gray50", lty = 2, linewidth = 1.2) +
+  geom_errorbar(aes(
+    xmin = estimate - 1.96*std.error,
+    xmax = estimate + 1.96*std.error),width = 0.7, alpha = 0.8) +
+  geom_point(size = 2.5) +
+  labs(y = NULL, x = "Odds ratios from logistic regression")
+```
+
+```{r}
+odds_ratios <- test_fit %>% pull(.workflow) %>% pluck(1) %>% tidy(exponentiate = TRUE) %>% 
+  filter(term != "(Intercept)") %>% filter(term != "n_drugs")
+
+odds_ratios$term <- c("Age", "Sex M","MCS 1", "MCS 2","MCS 3","MCS 4",
+                      "Cluster 3","Cluster 2","Cluster 4")
+```
+
+
+better plot:
+```{r}
+P1 <- odds_ratios %>% 
+ggplot(aes(estimate, fct_reorder(term, estimate))) +
+  geom_vline(xintercept = 1, color = "gray50", lty = 2, linewidth = 1.2) +
+  geom_errorbar(aes(
+    xmin = estimate - 1.96*std.error,
+    xmax = estimate + 1.96*std.error),width = 0.7, alpha = 0.8) +
+  geom_point(size = 2.5) +
+  labs(y = NULL, x = NULL) + ggtitle("Odds ratios from logistic regression") + 
+  theme(legend.position = "none",axis.text = element_text(size = 12),
+        plot.title = element_text(size = 16,hjust = 0.5)) 
+```
+
+```{r}
+P1
+ggsave("odds_ratios_pdc_cluster.png", dpi = 1000)
+```
+
+```{r}
+odds_ratios$color <- as.factor(c(0,0,0,0,0,0,2,3,4))
+
+mycolors <- c("gray0","#00BFC4" ,"#7CAE00", "#C77CFF")
+
+P1 <- odds_ratios %>% 
+ggplot(aes(estimate, fct_reorder(term, estimate),color = color)) +
+  geom_vline(xintercept = 1, color = "gray50", lty = 2, linewidth = 1.2) +
+  geom_errorbar(aes(
+    xmin = estimate - 1.96*std.error,
+    xmax = estimate + 1.96*std.error),width = 0.7, alpha = 0.8) +
+  geom_point(size = 2.5) +
+  scale_color_manual(values=mycolors) +
+  labs(y = NULL, x = NULL) + ggtitle("Odds ratios from logistic regression") + 
+  theme(legend.position = "none",axis.text = element_text(size = 12),
+        plot.title = element_text(size = 16,hjust = 0.5)) + scale_x_log10()
+
+P1
+```
+
+```{r}
+P1
+ggsave("odds_ratios_pdc_cluster_color.png", dpi = 1000,height = 6, width = 7)
+```
+

@@ -1,0 +1,311 @@
+---
+title: "classification tree"
+output: html_notebook
+---
+
+```{r}
+library(tidyverse)
+library(tidymodels)
+library(themis)
+library(patchwork)
+library(vip)
+library(rpart.plot)
+```
+
+```{r}
+load("~/Documents/Applied Statistics/Project/Materiale_appstat/final dataframes/data.RData")
+```
+
+```{r}
+df <- data %>% select(c(SESSO,hospitalized,eta_Min,MCS,PDC_TOT,n_drugs))
+```
+
+stratified k_fold cross-validation on hospitalized
+
+```{r}
+set.seed(123)
+df_split <- initial_split(df, strata = hospitalized)
+df_train <- training(df_split)
+df_test <- testing(df_split)
+
+set.seed(234)
+df_folds <- vfold_cv(df_train, strata = hospitalized)
+```
+
+we start by keeping all of the variables as numeric and letting the tree do the splitting for us
+
+```{r}
+rec_basic <- recipe(hospitalized ~ ., data = df_train) %>%  step_dummy(all_nominal_predictors())
+```
+
+```{r}
+tree_spec <- decision_tree(cost_complexity = tune(), tree_depth = tune(), min_n = tune() ) %>% 
+  set_mode("classification") %>% set_engine("rpart")
+```
+
+setting up a grid search for the hyperparameters
+
+```{r}
+tree_grid <- grid_regular(cost_complexity(), tree_depth(), min_n(), levels = 4)
+```
+
+```{r}
+wf_basic <- workflow(rec_basic,tree_spec)
+```
+
+fitting the gridsearch on the cv_folds
+
+```{r}
+perf <- metric_set(accuracy, sensitivity, specificity, roc_auc, precision, recall)
+ctrl_preds <- control_grid(save_pred = TRUE)  
+
+doParallel::registerDoParallel()
+
+rs_basic <- tune_grid(wf_basic, df_folds, grid = tree_grid, control = ctrl_preds, metrics = perf)
+```
+
+```{r}
+autoplot(rs_basic, metric = c("accuracy","sensitivity","specificity"))
+```
+
+we still have a problem with specificity, we predict too many TRONCATO, what increases specificity is low minimal nodes and high tree depth, i.e. complex models
+
+```{r}
+simpler_tree <- select_by_one_std_err(rs_basic, -cost_complexity, metric = "sensitivity" )
+```
+
+on test data
+
+```{r}
+final_wf <- finalize_workflow(wf_basic, simpler_tree)
+final_tree <- finalize_model(tree_spec, simpler_tree)
+```
+
+```{r}
+final_rs <- last_fit(final_wf, df_split,metrics = perf)
+```
+
+```{r}
+collect_metrics(final_rs)
+```
+
+still the same problem with sensitivity
+
+```{r}
+collect_predictions(final_rs) %>% conf_mat(hospitalized,.pred_class)
+```
+
+we can try to do better by using downsampling
+
+```{r}
+rec_dw <- recipe(hospitalized ~ ., data = df_train) %>%  step_dummy(all_nominal_predictors()) %>% step_downsample(hospitalized)
+```
+
+```{r}
+wf_dw <- workflow(rec_dw,tree_spec)
+```
+
+```{r}
+doParallel::registerDoParallel()
+
+rs_dw <- tune_grid(wf_dw, df_folds, grid = tree_grid, control = ctrl_preds, metrics = perf)
+```
+
+```{r}
+autoplot(rs_dw, metric = c("accuracy","roc_auc","sensitivity","specificity"))
+```
+
+the results are much better now, we seem to have a good balance between sensitivity and specificity, clearly depth 5 is the best, and it seems that the minimal node size is not influential, for Occam's razor we chose the highest Minimal node size and the highest cost-complexity before the jump
+
+```{r}
+best_tree_spec <- decision_tree(cost_complexity = 0.0001 , tree_depth = 10, min_n = 40 ) %>% 
+  set_mode("classification") %>% set_engine("rpart")
+```
+
+fitting the model to the test data
+
+```{r}
+test_rs_dw <- workflow() %>% add_recipe(rec_dw) %>% add_model(best_tree_spec) %>% 
+  last_fit(df_split,metrics = perf)
+```
+
+```{r}
+collect_metrics(test_rs_dw)
+```
+
+the results are quite good now
+
+```{r}
+collect_predictions(test_rs_dw) %>% conf_mat(hospitalized,.pred_class) 
+```
+
+```{r}
+collect_predictions(test_rs_dw) %>% roc_curve(hospitalized,.pred_NOT_HOSPITALIZED) %>% autoplot()
+```
+
+let's plot the variable importance
+
+```{r}
+vip(extract_fit_engine(test_rs_dw),geom = "col")
+```
+
+we can see that the age plays a significant role in the predictions, maybe it could be a good idea to segment the population into chunks to get better results
+
+let's try to see if there is something interesting in the pdp plots
+
+```{r}
+library(DALEXtra)
+
+tree_explainer <- explain_tidymodels(
+  extract_workflow(test_rs_dw),
+  data = dplyr::select(df_train, -hospitalized),
+  y = as.integer(df_train$hospitalized),
+  verbose = TRUE
+)
+```
+
+PDC_TOT
+
+```{r}
+pdp_pdc <- model_profile(
+  tree_explainer,
+  variables = "PDC_TOT",
+  N = NULL
+)
+```
+
+```{r}
+as_tibble(pdp_pdc$agr_profiles) %>% 
+  mutate(`_label_` = str_remove(`_label_`, "workflow_")) %>%
+  ggplot(aes(`_x_`, `_yhat_`, color = `_label_`)) +
+  geom_line(linewidth = 1.2, alpha = 0.8) +
+  labs(
+    x = "Total PDC",
+    y = "Predicted probability of not being hospitalized",
+    color = NULL,
+    title = "Partial dependence plot for hospitalization based on PDC",
+  ) + theme(legend.position = "none")
+```
+
+it seems that as we increase pdc we are less likely to be hosptalized
+
+Eta_Min
+
+```{r}
+pdp_eta <- model_profile(
+  tree_explainer,
+  variables = "eta_Min",
+  N = NULL
+)
+```
+
+```{r}
+as_tibble(pdp_eta$agr_profiles) %>% 
+  mutate(`_label_` = str_remove(`_label_`, "workflow_")) %>%
+  ggplot(aes(`_x_`, `_yhat_`, color = `_label_`)) +
+  geom_line(linewidth = 1.2, alpha = 0.8) +
+  labs(
+    x = "eta_Min ",
+    y = "Predicted probability of not being hospitalized",
+    color = NULL,
+    title = "Partial dependence plot for hospitalization based on eta_Min",
+  )
+```
+
+we could look for interactions between the features, looking at grouped pdp plots for PDC
+
+```{r}
+pdp_pdc <- model_profile(
+  tree_explainer,
+  variables = "PDC_TOT",
+  N = NULL,
+  groups = "eta_Min"
+)
+```
+
+```{r}
+as_tibble(pdp_pdc$agr_profiles) %>% 
+  mutate(`_label_` = str_remove(`_label_`, "workflow_")) %>%
+  ggplot(aes(`_x_`, `_yhat_`, color = `_label_`)) +
+  geom_line(linewidth = 1.2, alpha = 0.8) +
+  labs(
+    x = "Total PDC",
+    y = "Predicted probability of not being hospitalized",
+    color = NULL,
+    title = "Partial dependence plot for hospitalization based on PDC",
+  )
+```
+
+overall it seems just a traslation, maybe some interaction
+
+```{r}
+pdp_pdc <- model_profile(
+  tree_explainer,
+  variables = "PDC_TOT",
+  N = NULL,
+  groups = "MCS"
+)
+```
+
+```{r}
+as_tibble(pdp_pdc$agr_profiles) %>% 
+  mutate(`_label_` = str_remove(`_label_`, "workflow_")) %>%
+  ggplot(aes(`_x_`, `_yhat_`, color = `_label_`)) +
+  geom_line(linewidth = 1.2, alpha = 0.8) +
+  labs(
+    x = "Total PDC",
+    y = "Predicted probability of not being hospitalized",
+    color = NULL,
+    title = "Partial dependence plot for hospitalization based on PDC",
+  )
+```
+
+here we can clearly see a difference in the different MCS, but overall s just a traslation
+
+```{r}
+pdp_pdc <- model_profile(
+  tree_explainer,
+  variables = "PDC_TOT",
+  N = NULL,
+  groups = "n_drugs"
+)
+```
+
+```{r}
+as_tibble(pdp_pdc$agr_profiles) %>% 
+  mutate(`_label_` = str_remove(`_label_`, "workflow_")) %>%
+  ggplot(aes(`_x_`, `_yhat_`, color = `_label_`)) +
+  geom_line(linewidth = 1.2, alpha = 0.8) +
+  labs(
+    x = "Total PDC",
+    y = "Predicted probability of not being hospitalized",
+    color = NULL,
+    title = "Partial dependence plot for hospitalization based on PDC",
+  )
+```
+
+it seems just a traslation, no interaction
+
+```{r}
+pdp_pdc <- model_profile(
+  tree_explainer,
+  variables = "PDC_TOT",
+  N = NULL,
+  groups = "SESSO"
+)
+```
+
+```{r}
+as_tibble(pdp_pdc$agr_profiles) %>% 
+  mutate(`_label_` = str_remove(`_label_`, "workflow_")) %>%
+  ggplot(aes(`_x_`, `_yhat_`, color = `_label_`)) +
+  geom_line(linewidth = 1.2, alpha = 0.8) +
+  labs(
+    x = "Total PDC",
+    y = "Predicted probability of not being hospitalized",
+    color = NULL,
+    title = "Partial dependence plot for hospitalization based on PDC",
+  )
+```
+
+looking at the scalse it does not seem relevant,it is just a traslation

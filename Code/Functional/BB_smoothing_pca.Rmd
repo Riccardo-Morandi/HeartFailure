@@ -1,0 +1,490 @@
+---
+title: "PDC_BB smoothing and pca"
+output: html_notebook
+---
+
+set up:
+
+```{r}
+setwd("/Users/macbookpro/Documents/Applied Statistics/Project/Materiale_appstat/Code/Functional/")
+library(tidyverse)
+library(fda)
+library(fields)
+```
+
+```{r}
+load("~/Documents/Applied Statistics/Project/Materiale_appstat/Code/Functional/pazienti.RData")
+load("~/Documents/Applied Statistics/Project/Materiale_appstat/Code/Functional/PDC_BB.RData")
+load("~/Documents/Applied Statistics/Project/Materiale_appstat/final dataframes/data.RData")
+```
+
+```{r}
+n=dim(PDC_BB)[2]
+index=sample(n,20)
+matplot(PDC_BB[,index],type = 'l',main='dayly PDC',xlab='day',ylab='PDC')
+```
+
+
+## smoothing
+
+### splines:
+
+```{r}
+days <- 1:365
+basis <- create.bspline.basis(rangeval=range(days),nbasis=150,norder = 4)
+data.fd <- Data2fd(y = PDC_BB,argvals = days,basisobj = basis)
+plot.fd(data.fd[index],xlab='days',ylab='PDC')
+```
+
+
+```{r}
+basis <- create.bspline.basis(rangeval=range(days),nbasis=365,norder = 4)
+data.fd <- Data2fd(y = PDC_BB,argvals = days,basisobj = basis)
+plot.fd(data.fd[index],xlab='days',ylab='PDC')
+```
+
+stability problem for large number of basis
+
+```{r}
+basis <- create.bspline.basis(rangeval=range(days),nbasis=200,norder = 4)
+data.fd <- Data2fd(y = PDC_BB,argvals = days,basisobj = basis)
+plot.fd(data.fd[index],xlab='days',ylab='PDC')
+```
+
+choosing the best number of basis via gcv:
+
+```{r}
+n <- dim(PDC_BB)[2]
+nbasis <- seq(275,325,25)
+gcv <- numeric(length(nbasis))
+PDC_BB_subset <- PDC_BB[,sample(n,1000)]
+
+for (i in 1:length(nbasis)){
+  basis <- create.bspline.basis(rangeval=range(days),nbasis=nbasis[i],norder = 4)
+  for(j in 1:1000){
+    gcv[i] <- gcv[i] + smooth.basis(days, PDC_BB_subset[,j], basis)$gcv
+  }
+  gcv[i] <- gcv[i]/n
+}
+```
+
+
+```{r}
+plot(nbasis,gcv,type = "b")
+nbasis[which.min(gcv)]
+abline(v = nbasis[which.min(gcv)], col = 2)
+```
+
+the best numver of basis is 275
+
+fitting the data
+```{r}
+basis <- create.bspline.basis(rangeval=range(days),nbasis=275,norder = 4)
+data.fd <- Data2fd(y = PDC_BB,argvals = days,basisobj = basis)
+```
+
+since we are interested in doing the pcca let's look at the covatiance matrix 
+
+```{r}
+basis.1 <- create.bspline.basis(rangeval=range(days),nbasis=365,norder = 4)
+data_W.fd.1 <- Data2fd(y = PDC_BB,argvals = days,basisobj = basis.1)
+
+
+basis.2 <- create.bspline.basis(rangeval=range(days),nbasis=275,norder = 4)
+data_W.fd.2 <- Data2fd(y = PDC_BB,argvals = days,basisobj = basis.2)
+
+par(mfrow=c(1,2))
+
+eval.1 <- eval.fd(days,data_W.fd.1)
+image.plot(days,days,(cov(t(eval.1))[1:365,])) 
+
+eval.2 <- eval.fd(days,data_W.fd.2)
+image.plot(days,days,(cor(t(eval.2))[1:365,]))
+```
+
+the covariance structure is not very similar
+
+fitting the pca on this:
+
+```{r}
+pca.res <- pca.fd(data.fd,nharm=10,centerfns=TRUE)
+```
+
+scree plot for the first 20 comp
+```{r}
+k <- 20
+par(mfrow = c(1,2))
+plot(pca.res$values[1:k ],xlab='number of components',ylab='Eigenvalues',type='b')
+plot(cumsum(pca.res$values[1:k ])/sum(pca.res$values), type='b', axes=F, xlab='number of components', 
+     ylab='contribution to the total variance', ylim=c(0.45,1))
+abline(h=1, col='blue')
+abline(h=0.9, lty=2, col='blue')
+box()
+axis(2,at=0:10/10,labels=0:10/10)
+axis(1,at=1:k ,labels=1:k ,las=1)
+mtext("scree plot f-PCA",outer = TRUE,side = 3,line = -1.5,cex = 1.5)
+```
+
+```{r}
+cumsum(pca.res$values[1:10])/sum(pca.res$values)
+```
+
+as a perturbation of the mean:
+```{r}
+media <- mean.fd(data.fd)
+
+par(mfrow = c(2,3))
+plot(media,lwd=2,ylim=c(-0.2,0.65),xlab='days',main='FPC1')
+lines(media+pca.res$harmonics[1,]*sqrt(pca.res$values[1]), col=2)
+lines(media-pca.res$harmonics[1,]*sqrt(pca.res$values[1]), col=3)
+
+plot(media,lwd=2,ylim=c(0,0.5),xlab='days',main='FPC2')
+lines(media+pca.res$harmonics[2,]*sqrt(pca.res$values[2]), col=2)
+lines(media-pca.res$harmonics[2,]*sqrt(pca.res$values[2]), col=3)
+
+plot(media,lwd=2,ylim=c(0,0.35),xlab='days',main='FPC3')
+lines(media+pca.res$harmonics[3,]*sqrt(pca.res$values[3]), col=2)
+lines(media-pca.res$harmonics[3,]*sqrt(pca.res$values[3]), col=3)
+
+plot(media,lwd=2,ylim=c(0,0.35),xlab='days',main='FPC4')
+lines(media+pca.res$harmonics[4,]*sqrt(pca.res$values[4]), col=2)
+lines(media-pca.res$harmonics[4,]*sqrt(pca.res$values[4]), col=3)
+
+plot(media,lwd=2,ylim=c(0.1,0.35),xlab='days',main='FPC5')
+lines(media+pca.res$harmonics[5,]*sqrt(pca.res$values[5]), col=2)
+lines(media-pca.res$harmonics[5,]*sqrt(pca.res$values[5]), col=3)
+
+plot(media,lwd=2,ylim=c(0,0.3),xlab='days',main='FPC6')
+lines(media+pca.res$harmonics[6,]*sqrt(pca.res$values[6]), col=2)
+lines(media-pca.res$harmonics[6,]*sqrt(pca.res$values[6]), col=3)
+```
+
+
+```{r}
+par(mfrow=c(2,3))
+plot(pca.res, nx=50, pointplot=TRUE, harm=1:6, expand=0, cycle=FALSE,xlab='day')
+```
+
+we can clearly see that he components are different number of oscillations in he data
+we coul use regularized pca if we wanr smoother pc but it seems we dont need them
+
+looking at he scores:
+
+```{r}
+scores <- data.frame(pca.res$scores)
+colnames(scores) <- c("comp1","comp2","comp3","comp4","comp5","comp6","comp7","comp8","comp9","comp10")
+scores$label <- pazienti$labelOUT
+```
+
+
+```{r}
+scores %>% ggplot(aes(comp1,comp2)) + geom_point(aes(col = label))
+scores %>% ggplot(aes(comp1,comp3)) + geom_point(aes(col = label))
+scores %>% ggplot(aes(comp2,comp3)) + geom_point(aes(col = label))
+scores %>% ggplot(aes(comp1,comp4)) + geom_point(aes(col = label))
+scores %>% ggplot(aes(comp1,comp5)) + geom_point(aes(col = label))
+scores %>% ggplot(aes(comp2,comp4)) + geom_point(aes(col = label))
+scores %>% ggplot(aes(comp3,comp4)) + geom_point(aes(col = label))
+scores %>% ggplot(aes(comp2,comp5)) + geom_point(aes(col = label))
+scores %>% ggplot(aes(comp3,comp5)) + geom_point(aes(col = label))
+scores %>% ggplot(aes(comp4,comp5)) + geom_point(aes(col = label))
+```
+
+```{r}
+scores %>% ggplot(aes(comp1,comp2)) + geom_point(aes(col = label)) + facet_wrap(vars(label))
+```
+
+
+```{r}
+scores %>% ggplot(aes(y = comp1, fill = label)) + geom_histogram(bins = 30, position = "fill")
+scores %>% ggplot(aes(y = comp2, fill = label)) + geom_histogram(bins = 30, position = "fill")
+scores %>% ggplot(aes(y = comp3, fill = label)) + geom_histogram(bins = 30, position = "fill")
+scores %>% ggplot(aes(y = comp4, fill = label)) + geom_histogram(bins = 30, position = "fill")
+scores %>% ggplot(aes(y = comp5, fill = label)) + geom_histogram(bins = 30, position = "fill")
+scores %>% ggplot(aes(y = comp6, fill = label)) + geom_histogram(bins = 30, position = "fill")
+```
+
+this are not easily separable
+
+logistic regression on the pc components
+
+```{r}
+codes <- pazienti$CODREG
+retained_patients <- data[data$COD_REG %in% codes,]
+retained_patients$fpca1 <- pca.res$scores[,1]
+retained_patients$fpca2 <- pca.res$scores[,2]
+retained_patients$fpca3 <- pca.res$scores[,3]
+```
+
+```{r}
+df <- retained_patients[,c(3,6,7,8,14,20,21,22)]
+```
+
+stratified k_fold cross-validation on labelout
+
+```{r}
+set.seed(123)
+df_split <- initial_split(df, strata = labelOUT)
+df_train <- training(df_split)
+df_test <- testing(df_split)
+
+set.seed(234)
+df_folds <- vfold_cv(df_train, strata = labelOUT)
+
+```
+
+```{r}
+glm_spec <- logistic_reg(engine = "glm")
+
+rec_paper <- recipe(labelOUT ~ ., data = df_train) %>% 
+  step_normalize(all_numeric_predictors()) %>% step_dummy(all_nominal_predictors())
+
+wf_paper <- workflow(rec_paper,glm_spec)
+```
+
+```{r}
+perf <- metric_set(accuracy,
+                   sensitivity,
+                   specificity,
+                   precision,
+                   recall,
+                   roc_auc)
+
+doParallel::registerDoParallel()
+ctrl_preds <- control_resamples(save_pred = TRUE)
+rs_basic <- fit_resamples(wf_paper, df_folds, control = ctrl_preds, metrics = perf)
+```
+
+```{r}
+collect_metrics(rs_basic)
+```
+
+```{r}
+collect_predictions(rs_basic) %>% group_by(id) %>% roc_curve(labelOUT,.pred_DECEDUTO) %>% autoplot()
+```
+
+fitting the model to the train data data
+
+```{r}
+fit_train <- fit(wf_paper,df_train)
+```
+
+looking at the coefficients:
+
+```{r}
+tidy(fit_train)
+```
+
+all of the coefficients are significant
+
+looking at the odds ratios:
+
+```{r}
+tidy(fit_train,exponentiate=TRUE)
+```
+
+we can see that the ODDS ratio relative to the PDC_TOT is 1.94
+
+### evaluation on test data
+
+```{r}
+test_fit <- last_fit(wf_paper,df_split,metrics = perf)
+test_fit %>% collect_metrics()
+```
+the performance does not change o the test data, no overfitting.
+
+let's investigate more:
+
+```{r}
+df_preds <- fit_train %>% augment(new_data = df_test)
+```
+
+```{r}
+df_preds %>% roc_curve(labelOUT,.pred_DECEDUTO) %>% autoplot()
+```
+
+looking at the odds ratios:
+
+```{r}
+test_fit %>% pull(.workflow) %>% pluck(1) %>% tidy(exponentiate = TRUE) %>% arrange(estimate) 
+```
+
+let's plot the coefficients
+
+```{r}
+test_fit %>% pull(.workflow) %>% pluck(1) %>% tidy() %>% 
+  filter(term != "(Intercept)") %>%
+  ggplot(aes(estimate, fct_reorder(term, estimate))) +
+  geom_vline(xintercept = 0, color = "gray50", lty = 2, linewidth = 1.2) +
+  geom_errorbar(aes(
+    xmin = estimate - 1.96*std.error,
+    xmax = estimate + 1.96*std.error),width = .7, alpha = 0.7) +
+  geom_point(size = 2) +
+  labs(y = NULL, x = "Coefficent from logistic regression")
+```
+
+smoothing splines:
+
+```{r}
+basis <- create.bspline.basis(days, norder=4)
+lam <- 1e-5
+```
+
+```{r}
+functionalPar <- fdPar(fdobj=basis, Lfdobj=2, lambda=lam)  
+data.smooth <- smooth.basis(days, PDC_BB, functionalPar)
+eval.0 <- eval.fd(days, data.smooth$fd, Lfd=0)
+```
+
+```{r}
+plot.fd(data.smooth$fd[index],xlab='days',ylab='PDC')
+```
+
+this looks the best, dooing gcv for lambad:
+
+```{r}
+lambda <- 10^seq(-12,-5,by = 0.5)
+gcv <- numeric(length(lambda))
+basis <- create.bspline.basis(days, norder=4)
+
+for (i in 1:length(lambda)){
+  functionalPar <- fdPar(fdobj=basis, Lfdobj=2, lambda=lambda[i])  
+  data.smooth <- smooth.basis(days, PDC_BB, functionalPar)
+  gcv[i] <- mean(data.smooth$gcv)
+}
+```
+
+```{r}
+plot(log(lambda),gcv,type = "b")
+abline(v = log(lambda[which.min(gcv)]), col = 2)
+```
+
+```{r}
+lambda[which.min(gcv)]
+```
+
+the best lambda is 1e-8
+
+```{r}
+basis <- create.bspline.basis(days, norder=4)
+lam <- lambda[which.min(gcv)]
+functionalPar <- fdPar(fdobj=basis, Lfdobj=2, lambda=lam)  
+data.smooth <- smooth.basis(days, PDC_BB, functionalPar)
+eval.0 <- eval.fd(days, data.smooth$fd, Lfd=0)
+```
+
+```{r}
+plot.fd(data.smooth$fd[index],xlab='days',ylab='PDC')
+```
+this looks to be the best
+
+```{r}
+id <- sample(n,250)
+plot.fd(data.smooth$fd[id],xlab='days',ylab='PDC',col = pazienti$labelOUT[id])
+```
+
+probably still difficult to classify
+
+
+fitting the pca on this:
+
+```{r}
+pca.res <- pca.fd(data.smooth$fd,nharm=10,centerfns=TRUE)
+```
+
+scree plot for the first 20 comp
+```{r}
+k <- 20
+par(mfrow = c(1,2))
+plot(pca.res$values[1:k ],xlab='number of components',ylab='Eigenvalues',type='b')
+plot(cumsum(pca.res$values[1:k ])/sum(pca.res$values), type='b', axes=F, xlab='number of components', 
+     ylab='contribution to the total variance', ylim=c(0.45,1))
+abline(h=1, col='blue')
+abline(h=0.9, lty=2, col='blue')
+box()
+axis(2,at=0:10/10,labels=0:10/10)
+axis(1,at=1:k ,labels=1:k ,las=1)
+mtext("scree plot f-PCA",outer = TRUE,side = 3,line = -1.5,cex = 1.5)
+```
+
+```{r}
+cumsum(pca.res$values[1:10])/sum(pca.res$values)
+```
+
+as a perturbation of the mean:
+```{r}
+media <- mean.fd(data.fd)
+
+par(mfrow = c(2,3))
+plot(media,lwd=2,ylim=c(-0.2,0.65),xlab='days',main='FPC1')
+lines(media+pca.res$harmonics[1,]*sqrt(pca.res$values[1]), col=2)
+lines(media-pca.res$harmonics[1,]*sqrt(pca.res$values[1]), col=3)
+
+plot(media,lwd=2,ylim=c(0,0.5),xlab='days',main='FPC2')
+lines(media+pca.res$harmonics[2,]*sqrt(pca.res$values[2]), col=2)
+lines(media-pca.res$harmonics[2,]*sqrt(pca.res$values[2]), col=3)
+
+plot(media,lwd=2,ylim=c(0,0.35),xlab='days',main='FPC3')
+lines(media+pca.res$harmonics[3,]*sqrt(pca.res$values[3]), col=2)
+lines(media-pca.res$harmonics[3,]*sqrt(pca.res$values[3]), col=3)
+
+plot(media,lwd=2,ylim=c(0,0.35),xlab='days',main='FPC4')
+lines(media+pca.res$harmonics[4,]*sqrt(pca.res$values[4]), col=2)
+lines(media-pca.res$harmonics[4,]*sqrt(pca.res$values[4]), col=3)
+
+plot(media,lwd=2,ylim=c(0.1,0.35),xlab='days',main='FPC5')
+lines(media+pca.res$harmonics[5,]*sqrt(pca.res$values[5]), col=2)
+lines(media-pca.res$harmonics[5,]*sqrt(pca.res$values[5]), col=3)
+
+plot(media,lwd=2,ylim=c(0,0.3),xlab='days',main='FPC6')
+lines(media+pca.res$harmonics[6,]*sqrt(pca.res$values[6]), col=2)
+lines(media-pca.res$harmonics[6,]*sqrt(pca.res$values[6]), col=3)
+```
+
+
+```{r}
+par(mfrow=c(2,3))
+plot(pca.res, nx=50, pointplot=TRUE, harm=1:6, expand=0, cycle=FALSE,xlab='day')
+```
+
+we can clearly see that he components are different number of oscillations in he data
+we coul use regularized pca if we wanr smoother pc but it seems we dont need them
+
+looking at he scores:
+
+```{r}
+scores <- data.frame(pca.res$scores)
+colnames(scores) <- c("comp1","comp2","comp3","comp4","comp5","comp6","comp7","comp8","comp9","comp10")
+scores$label <- pazienti$labelOUT
+```
+
+
+```{r}
+scores %>% ggplot(aes(comp1,comp2)) + geom_point(aes(col = label))
+scores %>% ggplot(aes(comp1,comp3)) + geom_point(aes(col = label))
+scores %>% ggplot(aes(comp2,comp3)) + geom_point(aes(col = label))
+scores %>% ggplot(aes(comp1,comp4)) + geom_point(aes(col = label))
+scores %>% ggplot(aes(comp1,comp5)) + geom_point(aes(col = label))
+scores %>% ggplot(aes(comp2,comp4)) + geom_point(aes(col = label))
+scores %>% ggplot(aes(comp3,comp4)) + geom_point(aes(col = label))
+scores %>% ggplot(aes(comp2,comp5)) + geom_point(aes(col = label))
+scores %>% ggplot(aes(comp3,comp5)) + geom_point(aes(col = label))
+scores %>% ggplot(aes(comp4,comp5)) + geom_point(aes(col = label))
+```
+
+```{r}
+scores %>% ggplot(aes(comp1,comp2)) + geom_point(aes(col = label)) + facet_wrap(vars(label))
+```
+
+
+```{r}
+scores %>% ggplot(aes(y = comp1, fill = label)) + geom_histogram(bins = 30, position = "fill")
+scores %>% ggplot(aes(y = comp2, fill = label)) + geom_histogram(bins = 30, position = "fill")
+scores %>% ggplot(aes(y = comp3, fill = label)) + geom_histogram(bins = 30, position = "fill")
+scores %>% ggplot(aes(y = comp4, fill = label)) + geom_histogram(bins = 30, position = "fill")
+scores %>% ggplot(aes(y = comp5, fill = label)) + geom_histogram(bins = 30, position = "fill")
+scores %>% ggplot(aes(y = comp6, fill = label)) + geom_histogram(bins = 30, position = "fill")
+```
+
+this are not easily separable
+

@@ -1,0 +1,256 @@
+---
+title: "Logistic regression"
+output: html_notebook
+---
+
+let's start by fitting a logistic regression on our data
+starting from the total adherence measured via PDC
+
+```{r}
+library(tidyverse)
+library(tidymodels)
+library(themis)
+library(patchwork)
+```
+
+## Explore the data
+
+loading the data
+
+```{r}
+load("~/Documents/Applied Statistics/Project/Materiale_appstat/final dataframes/data.RData")
+```
+
+```{r}
+glimpse(data)
+```
+
+we want to build a logistic regression model using sesso, età, MCS, PDC_tot, n_drugs
+
+we need some preprocesing on this covariates
+
+```{r}
+df <- data %>% select(c(SESSO,hospitalized,eta_Min,MCS,PDC_TOT,n_drugs))
+```
+
+let's look at the MCS 
+
+```{r}
+ggplot(df,aes(as.factor(MCS))) + geom_bar(aes(fill = hospitalized))
+```
+I will keep it as a number, but possibly group it and use the groupped variable
+
+for the age
+
+```{r}
+ggplot(df, aes(eta_Min)) + geom_histogram(aes(fill = hospitalized),binwidth = 1)
+```
+
+this needs to be normalized when using the model
+
+looking at the PDC
+
+```{r}
+ggplot(df, aes(PDC_TOT)) + geom_freqpoly(aes(colour = hospitalized),binwidth = 0.01)
+```
+
+first we keep this as a double, then we will group it
+
+# logisic regression 
+
+## the basic model
+
+stratified k_fold cross-validation on hospitalized
+
+```{r}
+set.seed(123)
+df_split <- initial_split(df, strata = hospitalized)
+df_train <- training(df_split)
+df_test <- testing(df_split)
+
+set.seed(234)
+df_folds <- vfold_cv(df_train, strata = hospitalized)
+
+```
+
+```{r}
+glm_spec <- logistic_reg(engine = "glm")
+
+rec_paper <- recipe(hospitalized ~ ., data = df_train) %>% 
+  step_normalize(eta_Min) %>% step_cut(PDC_TOT,breaks = c(0.25,0.5,0.75),include_outside_range = FALSE) %>% 
+  step_dummy(all_nominal_predictors())
+
+wf_paper <- workflow(rec_paper %>% step_upsample(hospitalized),glm_spec)
+```
+
+```{r}
+perf <- metric_set(accuracy,
+                   sensitivity,
+                   specificity,
+                   precision,
+                   recall,
+                   roc_auc)
+
+doParallel::registerDoParallel()
+ctrl_preds <- control_resamples(save_pred = TRUE)
+rs_basic <- fit_resamples(wf_paper, df_folds, control = ctrl_preds, metrics = perf)
+```
+
+```{r}
+collect_metrics(rs_basic)
+```
+this is quite good: accucracy of 67% and ROC .74
+
+```{r}
+collect_predictions(rs_basic) %>% group_by(id) %>% roc_curve(hospitalized,.pred_NOT_HOSPITALIZED) %>% autoplot()
+```
+
+fitting the model to the train data data
+
+```{r}
+fit_train <- fit(wf_paper,df_train)
+```
+
+looking at the coefficients:
+
+```{r}
+tidy(fit_train)
+```
+
+all of the coefficients are significant
+
+looking at the odds ratios:
+
+```{r}
+tidy(fit_train,exponentiate=TRUE)
+```
+
+we can see that the ODDS ratio relative to the PDC_TOT is 1.94
+
+### evaluation on test data
+
+```{r}
+test_fit <- last_fit(wf_paper,df_split,metrics = perf)
+test_fit %>% collect_metrics()
+```
+the performance does not change o the test data, no overfitting.
+
+let's investigate more:
+
+```{r}
+df_preds <- fit_train %>% augment(new_data = df_test)
+```
+
+```{r}
+df_preds %>% roc_curve(hospitalized,.pred_NOT_HOSPITALIZED) %>% autoplot()
+```
+
+looking at the odds ratios:
+
+```{r}
+test_fit %>% pull(.workflow) %>% pluck(1) %>% tidy(exponentiate = TRUE) %>% arrange(estimate) 
+```
+
+we can see that the odds ration for the PDC terms are significant and are 0.7 and 0.87 
+
+let's plot the coefficients
+
+```{r}
+test_fit %>% pull(.workflow) %>% pluck(1) %>% tidy() %>% 
+  filter(term != "(Intercept)") %>%
+  ggplot(aes(estimate, fct_reorder(term, estimate))) +
+  geom_vline(xintercept = 0, color = "gray50", lty = 2, linewidth = 1.2) +
+  geom_errorbar(aes(
+    xmin = estimate - 1.96*std.error,
+    xmax = estimate + 1.96*std.error),width = .7, alpha = 0.7) +
+  geom_point(size = 2) +
+  labs(y = NULL, x = "Coefficent from logistic regression")
+```
+ 
+ the estimates for the PDC in the two classes 0.5-0.75 and 0.75-1 is the same we could group them together
+ 
+```{r}
+rec2 <- recipe(hospitalized ~ ., data = df_train) %>% 
+  step_normalize(eta_Min) %>% step_cut(PDC_TOT,breaks = c(0.25,0.5),include_outside_range = FALSE) %>% 
+  step_dummy(all_nominal_predictors())
+
+wf2 <- workflow(rec2 %>% step_upsample(hospitalized),glm_spec)
+```
+
+```{r}
+doParallel::registerDoParallel()
+ctrl_preds <- control_resamples(save_pred = TRUE)
+rs2 <- fit_resamples(wf2, df_folds, control = ctrl_preds, metrics = perf)
+```
+
+```{r}
+collect_metrics(rs2)
+```
+this is quite good: accucracy of 70% and ROC .77
+
+```{r}
+collect_predictions(rs2) %>% group_by(id) %>% roc_curve(hospitalized,.pred_NOT_HOSPITALIZED) %>% autoplot()
+```
+
+fitting the model to the train data data
+
+```{r}
+fit_train <- fit(wf2,df_train)
+```
+
+looking at the coefficients:
+
+```{r}
+tidy(fit_train)
+```
+
+all of the coefficients are significant
+
+looking at the odds ratios:
+
+```{r}
+tidy(fit_train,exponentiate=TRUE)
+```
+
+we can see that the ODDS ratio relative to the PDC_TOT are low
+
+### evaluation on test data
+
+```{r}
+test_fit <- last_fit(wf2,df_split,metrics = perf)
+test_fit %>% collect_metrics()
+```
+the performance does not change o the test data, no overfitting.
+
+let's investigate more:
+
+```{r}
+df_preds <- fit_train %>% augment(new_data = df_test)
+```
+
+```{r}
+df_preds %>% roc_curve(hospitalized,.pred_NOT_HOSPITALIZED) %>% autoplot()
+```
+
+looking at the odds ratios:
+
+```{r}
+test_fit %>% pull(.workflow) %>% pluck(1) %>% tidy(exponentiate = TRUE) %>% arrange(estimate) 
+```
+
+let's plot the coefficients
+
+```{r}
+test_fit %>% pull(.workflow) %>% pluck(1) %>% tidy() %>% 
+  filter(term != "(Intercept)") %>%
+  ggplot(aes(estimate, fct_reorder(term, estimate))) +
+  geom_vline(xintercept = 0, color = "gray50", lty = 2, linewidth = 1.2) +
+  geom_errorbar(aes(
+    xmin = estimate - 1.96*std.error,
+    xmax = estimate + 1.96*std.error),width = .7, alpha = 0.7) +
+  geom_point(size = 2) +
+  labs(y = NULL, x = "Coefficent from logistic regression")
+```
+
+ we will try to get a better separation of the results using trees a a single feature at a time to improve the splits
+ 

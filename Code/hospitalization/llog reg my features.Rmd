@@ -1,0 +1,242 @@
+---
+title: "logistic regression my features"
+output: html_notebook
+---
+
+```{r}
+library(tidyverse)
+library(tidymodels)
+library(themis)
+library(patchwork)
+library(car)
+```
+
+```{r}
+load("~/Documents/Applied Statistics/Project/Materiale_appstat/final dataframes/data.RData")
+```
+
+```{r}
+df <- data %>% select(c(SESSO,hospitalized,eta_Min,MCS,PDC_TOT,n_drugs))
+```
+
+we consider n_drugs as a factor
+
+```{r}
+df$n_drugs <- as.factor(df$n_drugs)
+df$MCS <- as.numeric(df$MCS)
+```
+
+stratified k_fold cross-validation on hospitalized
+
+```{r}
+set.seed(123)
+df_split <- initial_split(df, strata = hospitalized)
+df_train <- training(df_split)
+df_test <- testing(df_split)
+
+set.seed(234)
+df_folds <- vfold_cv(df_train, strata = hospitalized)
+```
+
+we use different set of features in the processing of the data:
+the MCS we use it at 1.5 to start with
+the PDC_TOT at 0.5
+
+age left as numeric for now
+
+we use downsampling on the data for class imbalance
+
+```{r}
+glm_spec <- logistic_reg(engine = "glm")
+
+rec_paper <- recipe(hospitalized ~ ., data = df_train) %>% 
+  step_normalize(eta_Min) %>% step_cut(PDC_TOT,breaks = c(0.5),include_outside_range = FALSE) %>% 
+  step_cut(MCS,breaks = c(1.5),include_outside_range = TRUE) 
+
+wf_paper <- workflow(rec_paper %>% step_downsample(hospitalized),glm_spec)
+```
+
+```{r}
+perf <- metric_set(accuracy,
+                   sensitivity,
+                   specificity,
+                   precision,
+                   recall,
+                   roc_auc)
+
+doParallel::registerDoParallel()
+ctrl_preds <- control_resamples(save_pred = TRUE)
+rs_paper <- fit_resamples(wf_paper, df_folds, control = ctrl_preds, metrics = perf)
+```
+
+```{r}
+collect_metrics(rs_paper)
+```
+
+```{r}
+collect_predictions(rs_paper) %>% group_by(id) %>% roc_curve(hospitalized,.pred_NOT_HOSPITALIZED) %>% autoplot()
+```
+
+on the test data
+
+```{r}
+test_fit <- wf_paper %>% last_fit(df_split,metrics = perf) 
+```
+
+```{r}
+collect_metrics(test_fit)
+```
+
+```{r}
+test_pred <- collect_predictions(test_fit)
+```
+
+```{r}
+test_pred %>% conf_mat(hospitalized,.pred_class)
+```
+
+looking at the summary of the model
+
+```{r}
+summary(extract_fit_engine(test_fit))
+```
+
+all of the predictors seem to be influential here
+
+looking at the odds ratios:
+
+```{r}
+test_fit %>% pull(.workflow) %>% pluck(1) %>% tidy(exponentiate = TRUE) %>% arrange(estimate) 
+```
+
+let's plot the coefficients
+
+```{r}
+test_fit %>% pull(.workflow) %>% pluck(1) %>% tidy() %>% 
+  filter(term != "(Intercept)") %>%
+  ggplot(aes(estimate, fct_reorder(term, estimate))) +
+  geom_vline(xintercept = 0, color = "gray50", lty = 2, linewidth = 1.2) +
+  geom_errorbar(aes(
+    xmin = estimate - 1.96*std.error,
+    xmax = estimate + 1.96*std.error),width = .7, alpha = 0.7) +
+  geom_point(size = 2) +
+  labs(y = NULL, x = "Coefficent from logistic regression")
+```
+
+another possibility is to let the MCS and the PDC be numeric and no segmentiation on the features
+
+```{r}
+rec_cat <- recipe(hospitalized ~ ., data = df_train) %>% 
+  step_normalize(eta_Min) %>% step_cut(PDC_TOT,breaks = c(0.5),include_outside_range = FALSE) %>% 
+  step_cut(MCS,breaks = c(1.5),include_outside_range = TRUE) 
+
+rec_MCS_num <- recipe(hospitalized ~ ., data = df_train) %>% 
+  step_normalize(eta_Min) %>% step_cut(PDC_TOT,breaks = c(0.5),include_outside_range = FALSE)
+
+rec_PDC_num <- recipe(hospitalized ~ ., data = df_train) %>% 
+  step_normalize(eta_Min) %>% step_cut(MCS,breaks = c(1.5),include_outside_range = TRUE) 
+
+rec_both_num <- recipe(hospitalized ~ ., data = df_train) %>% 
+  step_normalize(eta_Min)
+```
+
+```{r}
+wf_set <-
+  workflow_set(
+    list(cat = rec_cat %>% step_downsample(hospitalized),
+         MCS = rec_MCS_num %>% step_downsample(hospitalized),
+         PDC = rec_PDC_num %>% step_downsample(hospitalized),
+         both = rec_both_num %>% step_downsample(hospitalized)),
+    list(glm = glm_spec)
+  )
+```
+
+```{r}
+doParallel::registerDoParallel()
+
+res_cv <- wf_set %>% workflow_map("fit_resamples",resamples = df_folds,verbose = TRUE,
+                                      metrics = perf, control = control_grid(save_workflow = TRUE, 
+                                                                             save_pred = TRUE))
+```
+
+```{r}
+autoplot(res_cv)
+```
+
+```{r}
+collect_predictions(res_cv) %>% group_by(wflow_id) %>% roc_curve(hospitalized, .pred_NOT_HOSPITALIZED) %>% autoplot()
+```
+
+the difference is minimal between mcs left as number and the both of them left as munbers
+
+```{r}
+collect_metrics(res_cv) %>% filter(.metric == "roc_auc")
+```
+
+
+let's try to use finer detail in the cutting
+
+```{r}
+rec_simple <- recipe(hospitalized ~ ., data = df_train) %>% 
+  step_normalize(eta_Min) %>% step_cut(PDC_TOT,breaks = c(0.4),include_outside_range = FALSE) %>% 
+  step_cut(MCS,breaks = c(1.5),include_outside_range = TRUE)
+
+rec_more_PDC <- recipe(hospitalized ~ ., data = df_train) %>% 
+  step_normalize(eta_Min) %>% step_cut(PDC_TOT,breaks = c(0.25,0.75),include_outside_range = FALSE) %>% 
+  step_cut(MCS,breaks = c(1.5),include_outside_range = TRUE)
+
+rec_more_MCS <- recipe(hospitalized ~ ., data = df_train) %>% 
+  step_normalize(eta_Min) %>% step_cut(PDC_TOT,breaks = c(0.4),include_outside_range = FALSE) %>% 
+  step_cut(MCS,breaks = c(0.5,1.5,2.5,3.5),include_outside_range = TRUE)
+
+rec_more_both <- recipe(hospitalized ~ ., data = df_train) %>% 
+  step_normalize(eta_Min) %>% step_cut(PDC_TOT,breaks = c(0.25,0.75),include_outside_range = FALSE) %>% 
+  step_cut(MCS,breaks = c(0.5,1.5,2.5,3.5),include_outside_range = TRUE)
+```
+
+```{r}
+wf_set <-
+  workflow_set(
+    list(simple = rec_simple %>% step_downsample(hospitalized),
+         PDC = rec_more_PDC %>% step_downsample(hospitalized),
+         MS = rec_more_MCS %>% step_downsample(hospitalized),
+         both = rec_more_both %>% step_downsample(hospitalized)),
+    list(glm = glm_spec)
+  )
+```
+
+```{r}
+doParallel::registerDoParallel()
+
+res_cv <- wf_set %>% workflow_map("fit_resamples",resamples = df_folds,verbose = TRUE,
+                                      metrics = perf, control = control_grid(save_workflow = TRUE, save_pred = TRUE))
+```
+
+```{r}
+autoplot(res_cv)
+```
+
+```{r}
+collect_predictions(res_cv) %>% group_by(wflow_id) %>% roc_curve(hospitalized, .pred_NOT_HOSPITALIZED) %>% autoplot()
+```
+
+the bet model is the oe with segmented CCI, but more info in the PDC does not seem to make a difference
+
+```{r}
+collect_metrics(res_cv) %>% filter(.metric == "roc_auc")
+```
+
+it seem that the better prediction comes when having more info on the MCS, the PDC is not that relevant in this case
+
+```{r}
+summary(extract_fit_engine(fit(pull_workflow(res_cv,id = "MS_glm"),data = df_train)))
+```
+
+```{r}
+summary(extract_fit_engine(fit(pull_workflow(res_cv,id = "both_glm"),data = df_train)))
+```
+
+in both cases it seems that the high pdc is positively linked to the hospitalization of the patient
+
+we can see that all of the covariates seem significant
+

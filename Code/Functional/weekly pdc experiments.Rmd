@@ -1,0 +1,491 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+set up:
+
+```{r}
+setwd("/Users/macbookpro/Documents/Applied Statistics/Project/Materiale_appstat/Code/Functional/")
+library(tidyverse)
+library(fda)
+library(fields)
+library(fdacluster)
+```
+
+```{r}
+load("~/Documents/Applied Statistics/Project/Materiale_appstat/Code/Functional/pazienti.RData")
+load("~/Documents/Applied Statistics/Project/Materiale_appstat/Code/Functional/PDC_TOT.RData")
+load("~/Documents/Applied Statistics/Project/Materiale_appstat/final dataframes/data.RData")
+```
+
+```{r}
+weekly_pdc <- PDC_TOT[seq(1,365,7),]
+n=dim(PDC_TOT)[2]
+index=sample(n,30)
+matplot(weekly_pdc[,index],type = 'l',main='weekly PDC',xlab='week',ylab='PDC')
+```
+
+```{r}
+weeks <- 1:53
+basis <- create.bspline.basis(weeks, norder=4)
+lam <- 1e-8
+functionalPar <- fdPar(fdobj=basis, Lfdobj=2, lambda=lam)  
+data.smooth <- smooth.basis(weeks, weekly_pdc, functionalPar)
+eval.0 <- eval.fd(weeks, data.smooth$fd, Lfd=0)
+```
+
+```{r}
+plot.fd(data.smooth$fd[index],xlab='weeks',ylab='PDC')
+```
+
+running the alg on a subset
+
+```{r}
+nkmeans <- n
+x <- t(matrix(rep(weeks,nkmeans),53,nkmeans))
+y <- t(eval.0[,1:nkmeans])
+k <- 4
+
+system.time(fdakma0der <- fdakmeans(x = x,y = y, n_clusters = k,
+  warping_class = "none",
+  metric = "l2",
+  centroid_type = "medoid",
+  seeds = seeds,
+  parallel_method = 1L,
+  number_of_threads = 4L,
+  distance_relative_tolerance = 1e-4,
+  add_silhouettes = FALSE
+)
+)
+
+labels <- fdakma0der$memberships
+#seeds <- fdakma0der$call_args$seeds
+
+setwd("/Users/macbookpro/Documents/Applied Statistics/Project/Materiale_appstat/Code/Functional/")
+save(labels,file = "labels_final.RData")
+```
+
+```{r}
+indexes <- sample(nkmeans,200)
+matplot(t(fdakma0der$aligned_curves[indexes,1,]),type = 'l',
+        main='clustered and alligned curves',xlab='weeks',ylab='PDC', col = labels[indexes])
+```
+
+```{r}
+autoplot(fdakma0der,type = "amplitude")
+```
+
+```{r}
+matplot(t(fdakma0der$center_curves[,1,]),type = 'l',
+        main='clustered and alligned curves',xlab='weeks',ylab='PDC', col = 1:k)
+```
+
+
+```{r}
+matplot(t(fdakma0der$aligned_curves[which(labels == 1)[1:100],1,]),type = 'l',
+        main='clustered and alligned curves',xlab='weeks',ylab='PDC',
+        col = pazienti[which(labels == 1)[1:100],2])
+```
+
+```{r}
+table(pazienti$labelOUT[which(labels == 1)])
+```
+
+
+```{r}
+matplot(t(fdakma0der$aligned_curves[which(labels == 2)[1:100],1,]),type = 'l',
+        main='clustered and alligned curves',xlab='weeks',ylab='PDC',
+        col = pazienti[which(labels == 2)[1:100],2])
+```
+
+```{r}
+table(pazienti$labelOUT[which(labels == 2)])
+```
+
+
+```{r}
+matplot(t(fdakma0der$aligned_curves[which(labels == 3)[1:100],1,]),type = 'l',
+        main='clustered and alligned curves',xlab='weeks',ylab='PDC',
+        col = pazienti[which(labels == 3)[1:100],2])
+```
+
+```{r}
+table(pazienti$labelOUT[which(labels == 3)])
+```
+
+
+```{r}
+matplot(t(fdakma0der$aligned_curves[which(labels == 4)[1:100],1,]),type = 'l',
+        main='clustered and alligned curves',xlab='weeks',ylab='PDC',
+        col = pazienti[which(labels == 4)[1:100],2])
+```
+
+```{r}
+table(pazienti$labelOUT[which(labels == 4)])
+```
+
+
+lets create a dataset with the full data and the clustering belongings
+
+```{r}
+labels_final <- rep(0,n)
+
+labels_final[labels==1] = 4
+labels_final[labels==2] = 3
+labels_final[labels==3] = 1
+labels_final[labels==4] = 2
+
+setwd("/Users/macbookpro/Documents/Applied Statistics/Project/Materiale_appstat/Code/Functional/")
+save(labels_final,file = "labels_final.RData")
+```
+
+
+```{r}
+data_with_clusters <- data
+
+data_with_clusters <- data_with_clusters %>% filter(COD_REG %in% pazienti$CODREG)
+
+data_with_clusters$cluster <- labels_final
+
+data_with_clusters$cluster1 <- as.numeric(labels_final == 1)
+data_with_clusters$cluster2 <- as.numeric(labels_final == 2)
+data_with_clusters$cluster3 <- as.numeric(labels_final == 3)
+data_with_clusters$cluster4 <- as.numeric(labels_final == 4)
+```
+
+```{r}
+setwd("/Users/macbookpro/Documents/Applied Statistics/Project/Materiale_appstat/Code/Functional/")
+save(data_with_clusters,file = "data_with_clusters.RData")
+```
+
+doing some plots
+
+```{r}
+nplots <- 150
+indexes_plot <- sample(n,nplots)
+unicurves <- fdakma0der$original_curves[indexes_plot, 1, ]
+grids <- matrix(rep(1:53,nplots),nrow = nplots, ncol = 53,byrow = TRUE)
+memberships <- labels_final[indexes_plot]
+
+wrangled_data <- tibble::tibble(
+      grid = purrr::array_tree(grids, margin = 1),
+      value = purrr::array_tree(unicurves, margin = 1),
+      membership = memberships,
+      curve_id = 1:nplots
+    ) |>
+      tidyr::unnest(cols = c(.data$grid, .data$value)) |> 
+  dplyr::bind_rows() |>
+    dplyr::mutate(
+      membership = as.factor(.data$membership),
+      curve_id = as.factor(.data$curve_id),
+    )
+
+```
+
+```{r}
+P1 <- wrangled_data |>
+      ggplot2::ggplot(ggplot2::aes(
+        x = .data$grid,
+        y = .data$value,
+        color = .data$membership,
+        group = .data$curve_id
+      )) +
+      ggplot2::geom_line() +
+      ggplot2::facet_wrap(ggplot2::vars(.data$membership)
+      ) +
+      ggplot2::labs(
+        title = "Functional data Clusters using k-means",
+        x = "Week",
+        y = "Running PDC"
+      ) 
+      ggplot2::theme(legend.position = "none")
+
+P1
+```
+
+```{r}
+P1
+ggsave("fd_clusters_square2.png", dpi = 1000)
+```
+
+```{r}
+P2 <- wrangled_data |>
+      ggplot2::ggplot(ggplot2::aes(
+        x = .data$grid,
+        y = .data$value,
+        color = .data$membership,
+        group = .data$curve_id
+      )) +
+      ggplot2::geom_line() +
+      ggplot2::facet_grid(
+        rows = ggplot2::vars(.data$membership)
+      ) +
+      ggplot2::labs(
+        title = "Functional data Clusters using k-means",
+        x = "Week",
+        y = "Running PDC"
+      ) +
+      ggplot2::theme(legend.position = "none")
+
+P2
+```
+
+```{r}
+P2
+ggsave("fd_clusters_cols2.png", dpi = 1000,height = 12,width = 7)
+```
+
+```{r}
+options(repr.plot.width = 4, repr.plot.height =1)
+P3<- wrangled_data |>
+      ggplot2::ggplot(ggplot2::aes(
+        x = .data$grid,
+        y = .data$value,
+        color = .data$membership,
+        group = .data$curve_id
+      )) +
+      ggplot2::geom_line() +
+      ggplot2::facet_grid(
+        cols = ggplot2::vars(.data$membership)
+      ) +
+      ggplot2::labs(
+        title = "Functional data Clusters using k-means",
+        x = "Week",
+        y = "Running PDC"
+      ) +
+      ggplot2::theme(legend.position = "none")
+
+P3
+```
+
+```{r}
+P3
+ggsave("fd_clusters_rows2.png", dpi = 1000,width = 12,height = 3)
+```
+
+```{r}
+nplots <- 30
+indexes_plot <- sample(n,nplots)
+unicurves <- t(PDC_TOT[,indexes_plot])
+grids <- matrix(rep(1:365,nplots),nrow = nplots, ncol = 365,byrow = TRUE)
+
+wrangled_data <- tibble::tibble(
+      grid = purrr::array_tree(grids, margin = 1),
+      value = purrr::array_tree(unicurves, margin = 1),
+      curve_id = 1:nplots
+    ) |>
+      tidyr::unnest(cols = c(grid, value)) |> 
+  dplyr::bind_rows() |>
+    dplyr::mutate(
+      curve_id = as.factor(curve_id),
+    )
+
+```
+
+```{r}
+P1 <- wrangled_data |>
+      ggplot(aes(
+        x = .data$grid,
+        y = .data$value,
+        color = .data$curve_id,
+        group = .data$curve_id
+      )) +
+      geom_line() +labs(
+        title = "Examples of functional PDC",
+        x = "Day",
+        y = "Running PDC"
+      ) + 
+      theme(legend.position = "none",axis.text = element_text(size = 12),
+            axis.title = element_text(size = 12), plot.title = element_text(size = 16,hjust = 0.5))  
+
+P1
+```
+
+```{r}
+P1
+ggsave("fd_pdc_ex2.png", dpi = 1000)
+```
+
+```{r}
+load("~/Documents/Applied Statistics/Project/Materiale_appstat/Code/Functional/labels_final.RData")
+```
+
+```{r}
+nplots <- 150
+#indexes_plot <- sample(n,nplots)
+unicurves <- t(PDC_TOT[,indexes_plot])
+grids <- matrix(rep(1:365,nplots),nrow = nplots, ncol = 365,byrow = TRUE)
+memberships <- labels_final[indexes_plot]
+
+wrangled_data <- tibble::tibble(
+      grid = purrr::array_tree(grids, margin = 1),
+      value = purrr::array_tree(unicurves, margin = 1),
+      membership = memberships,
+      curve_id = 1:nplots
+    ) |>
+      tidyr::unnest(cols = c(grid, value)) |> 
+  dplyr::bind_rows() |>
+    dplyr::mutate(
+      membership = as.factor(membership),
+      curve_id = as.factor(curve_id),
+    )
+
+```
+
+```{r}
+P1 <- wrangled_data |>
+      ggplot2::ggplot(ggplot2::aes(
+        x = grid,
+        y = value,
+        color = membership,
+        group = curve_id
+      )) +
+      ggplot2::geom_line() +
+      ggplot2::facet_wrap(ggplot2::vars(membership)
+      ) +
+      ggplot2::labs(
+        title = "Functional data Clusters using k-means",
+        x = "Day",
+        y = "Running PDC"
+      ) 
+      ggplot2::theme(legend.position = "none")
+
+P1
+```
+
+```{r}
+indexes1 <- indexes_plot[labels_final[indexes_plot]==1]
+```
+
+
+```{r}
+i <- 29
+matplot(PDC_TOT[,indexes1[i]],type = 'l',main='weekly PDC',xlab='week',ylab='PDC',col = labels_final[indexes1[i]])
+```
+codici da togliere:
+
+indeces2 da togliere 2463 5286 19 8197
+
+```{r}
+indexes_plot2 <- indexes_plot
+indexes_plot2 <- indexes_plot2[indexes_plot2!=2463]
+indexes_plot2 <- indexes_plot2[indexes_plot2!=5286]
+indexes_plot2 <- indexes_plot2[indexes_plot2!=19]
+indexes_plot2 <- indexes_plot2[indexes_plot2!=8197]
+```
+
+
+togliere 6604 11458
+
+```{r}
+indexes_plot2 <- indexes_plot2[indexes_plot2!=6604]
+indexes_plot2 <- indexes_plot2[indexes_plot2!=11458]
+```
+
+
+```{r}
+nplots <- 144
+#indexes_plot <- sample(n,nplots)
+
+unicurves <- t(PDC_TOT[,indexes_plot2])
+grids <- matrix(rep(1:365,nplots),nrow = nplots, ncol = 365,byrow = TRUE)
+memberships <- labels_final[indexes_plot2]
+
+wrangled_data <- tibble::tibble(
+      grid = purrr::array_tree(grids, margin = 1),
+      value = purrr::array_tree(unicurves, margin = 1),
+      membership = memberships,
+      curve_id = 1:nplots
+    ) |>
+      tidyr::unnest(cols = c(grid, value)) |> 
+  dplyr::bind_rows() |>
+    dplyr::mutate(
+      membership = as.factor(membership),
+      curve_id = as.factor(curve_id),
+    )
+
+```
+
+```{r}
+P1 <- wrangled_data |>
+      ggplot2::ggplot(ggplot2::aes(
+        x = grid,
+        y = value,
+        color = membership,
+        group = curve_id
+      )) +
+      ggplot2::geom_line() +
+      ggplot2::facet_wrap(ggplot2::vars(membership)
+      ) +
+      ggplot2::labs(
+        x = "Day",
+        y = "Running PDC"
+      ) +
+      ggplot2::theme(legend.position = "none")
+
+P1
+```
+
+```{r}
+P1
+ggsave("fd_clusters_square2.png", dpi = 1000)
+```
+
+```{r}
+P1 <- wrangled_data |>
+      ggplot2::ggplot(ggplot2::aes(
+        x = grid,
+        y = value,
+        color = membership,
+        group = curve_id
+      )) +
+      ggplot2::geom_line() +
+      ggplot2::facet_grid(
+        rows = ggplot2::vars(.data$membership)
+      ) +
+      ggplot2::labs(
+        title = "Functional data Clusters using k-means",
+        x = "Day",
+        y = "Running PDC"
+      ) +
+      ggplot2::theme(legend.position = "none")
+
+P1
+```
+
+```{r}
+P1
+ggsave("fd_clusters_rows2.png", dpi = 1000,height = 12,width = 7)
+```
+
+
+
+```{r}
+P1 <- wrangled_data |>
+      ggplot2::ggplot(ggplot2::aes(
+        x = grid,
+        y = value,
+        color = membership,
+        group = curve_id
+      )) +
+      ggplot2::geom_line() +
+     ggplot2::facet_grid(
+        cols = ggplot2::vars(.data$membership)
+      ) +
+      ggplot2::labs(
+        title = "Functional data Clusters using k-means",
+        x = "Day",
+        y = "Running PDC"
+      ) +
+      ggplot2::theme(legend.position = "none")
+
+P1
+```
+
+```{r}
+P1
+ggsave("fd_clusters_cols2.png", dpi = 1000,width = 12,height = 3)
+```
+
+
